@@ -43,8 +43,11 @@ enum Command {
     Delete(commands::delete::DeleteArgs),
 
     /// List all managed processes with status and metrics.
-    #[command(alias = "ls", alias = "status", alias = "jlist")]
+    #[command(alias = "ls", alias = "status")]
     List(commands::list::ListArgs),
+
+    /// Output managed process list directly as JSON (PM2 jlist compatibility).
+    Jlist,
 
     /// Show detailed info about a single process.
     #[command(alias = "describe")]
@@ -100,6 +103,13 @@ async fn main() -> Result<()> {
         Command::Reload(args) => commands::reload::run(args).await,
         Command::Delete(args) => commands::delete::run(args).await,
         Command::List(args) => commands::list::run(args).await,
+        Command::Jlist => {
+            commands::list::run(commands::list::ListArgs {
+                full: false,
+                json: true,
+            })
+            .await
+        }
         Command::Info(args) => commands::info::run(args).await,
         Command::Logs(args) => commands::logs::run(args).await,
         Command::Flush(args) => commands::flush::run(args).await,

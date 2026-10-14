@@ -190,12 +190,11 @@ async fn dispatch_request(
             }
         }
 
-        // Zero-downtime rolling reload:
-        //   1. Spawn a fresh supervisor with a new cancellation token.
-        //   2. Wait up to 2 s for the new process to reach Running state.
-        //   3. Cancel the old supervisor (graceful stop of the old process).
-        // For fork-mode this ensures the new process is up before the old one dies.
-        // For cluster-mode with instances > 1, each slot is rotated sequentially.
+        // Graceful reload:
+        //   1. Gracefully stop old supervisor so network ports and file locks are released.
+        //   2. Wait for the old process to fully exit (up to 2 s).
+        //   3. Spawn fresh supervisor with new cancellation token.
+        //   4. Wait for new instance to reach active state before replying.
         Method::ProcessReload => {
             if let Ok(NameParams { name }) = request.parse_params() {
                 let target_name = registry.find_name_by_id_or_name(&name);
@@ -205,7 +204,26 @@ async fn dispatch_request(
                     (Some(target_name), Some(config)) => {
                         let old_cancel = registry.supervisor_cancel(&target_name);
 
-                        // Spawn the new supervisor with a fresh token.
+                        // 1. Gracefully stop the old supervisor.
+                        if let Some(cancel) = old_cancel {
+                            cancel.cancel();
+                        }
+
+                        // 2. Wait up to 2 seconds for previous process to release ports and exit.
+                        let mut elapsed = 0u64;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            elapsed += 100;
+                            let still_running = registry
+                                .get(&target_name)
+                                .map(|p| p.state.is_active())
+                                .unwrap_or(false);
+                            if !still_running || elapsed >= 2000 {
+                                break;
+                            }
+                        }
+
+                        // 3. Reset cancel token and spawn fresh supervisor.
                         if let Some(new_token) = registry.reset_cancel_token(&target_name) {
                             crate::supervisor::spawn(
                                 target_name.clone(),
@@ -216,7 +234,7 @@ async fn dispatch_request(
                             );
                         }
 
-                        // Give the new process time to start (max 2 s).
+                        // 4. Wait for new process to become active.
                         let mut elapsed = 0u64;
                         loop {
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -230,18 +248,10 @@ async fn dispatch_request(
                             }
                         }
 
-                        // Now gracefully stop the old supervisor.
-                        if let Some(cancel) = old_cancel {
-                            cancel.cancel();
-                        }
-
                         let resp = Response::ok(
                             req_id,
                             ResponseResult::Ack {
-                                message: format!(
-                                    "Process '{}' reloaded (zero-downtime)",
-                                    target_name
-                                ),
+                                message: format!("Process '{}' reloaded gracefully", target_name),
                             },
                         );
                         writer.lock().await.send(&resp).await?;
