@@ -2,6 +2,7 @@ mod daemon;
 mod handlers;
 mod logger;
 mod metrics;
+mod pruner;
 mod registry;
 mod storage;
 mod supervisor;

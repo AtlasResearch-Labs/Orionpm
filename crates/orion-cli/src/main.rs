@@ -34,7 +34,7 @@ enum Command {
     #[command(alias = "res")]
     Restart(commands::restart::RestartArgs),
 
-    /// Zero-downtime reload (send SIGUSR2 and replace workers).
+    /// Zero-downtime reload (start new instance then gracefully stop old).
     #[command(alias = "gracefulReload")]
     Reload(commands::reload::ReloadArgs),
 
@@ -47,10 +47,17 @@ enum Command {
     List(commands::list::ListArgs),
 
     /// Show detailed info about a single process.
+    #[command(alias = "describe")]
     Info(commands::info::InfoArgs),
 
     /// Show or tail logs for a process.
     Logs(commands::logs::LogsArgs),
+
+    /// Clear stored logs for a process (or all processes).
+    Flush(commands::flush::FlushArgs),
+
+    /// Reset the restart counter for a process (or all processes).
+    Reset(commands::reset::ResetArgs),
 
     /// Launch the interactive terminal monitor.
     Monit,
@@ -70,7 +77,7 @@ enum Command {
     /// Control the oriond daemon process.
     Daemon(commands::daemon::DaemonArgs),
 
-    /// Import and convert PM2 ecosystem configurations (ecosystem.config.js, ecosystem.json).
+    /// Import and convert PM2 ecosystem configurations.
     Import(commands::import::ImportArgs),
 }
 
@@ -92,6 +99,8 @@ async fn main() -> Result<()> {
         Command::List(args) => commands::list::run(args).await,
         Command::Info(args) => commands::info::run(args).await,
         Command::Logs(args) => commands::logs::run(args).await,
+        Command::Flush(args) => commands::flush::run(args).await,
+        Command::Reset(args) => commands::reset::run(args).await,
         Command::Monit => tui::run().await,
         Command::Save => commands::save::run().await,
         Command::Restore => commands::restore::run().await,

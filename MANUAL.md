@@ -16,8 +16,10 @@
    - [reload](#orion-reload)
    - [delete](#orion-delete)
    - [list / ls / status](#orion-list--ls--status)
-   - [info](#orion-info)
+   - [info / describe](#orion-info-aliases-describe)
    - [logs](#orion-logs)
+   - [flush](#orion-flush)
+   - [reset](#orion-reset)
    - [monit](#orion-monit)
    - [save](#orion-save)
    - [restore](#orion-restore)
@@ -269,11 +271,14 @@ orion status
 
 ---
 
-### `orion info`
+### `orion info` (Aliases: `describe`)
 Shows detailed runtime metadata, file paths, and resource usage for a single process.
 
 ```bash
 orion info <TARGET>
+orion describe <TARGET>
+# or using opm shortcut:
+opm describe <TARGET>
 ```
 
 #### Arguments
@@ -282,6 +287,7 @@ orion info <TARGET>
 #### Example
 ```bash
 orion info my-api
+orion describe 0
 ```
 
 ---
@@ -311,7 +317,52 @@ orion logs my-api
 orion logs my-api -f
 
 # Follow combined logs of all processes
-orion logs all -f --lines 100
+```
+
+---
+
+### `orion flush`
+Clears stored logs from the internal SQLite database for a target process or all processes.
+
+```bash
+orion flush <TARGET>
+# or using opm shortcut:
+opm flush all
+```
+
+#### Arguments
+- `<TARGET>`: Process name, numeric ID, or `all`.
+
+#### Examples
+```bash
+# Flush logs for a specific service
+orion flush my-api
+
+# Flush logs for all running services
+orion flush all
+```
+
+---
+
+### `orion reset`
+Resets the crash and restart counter back to 0 for a target process or all processes. Useful after fixing a bug to clear accumulated restart counts.
+
+```bash
+orion reset <TARGET>
+# or using opm shortcut:
+opm reset all
+```
+
+#### Arguments
+- `<TARGET>`: Process name, numeric ID, or `all`.
+
+#### Examples
+```bash
+# Reset counter for a specific service
+orion reset my-api
+
+# Reset counters for all processes
+orion reset all
 ```
 
 ---
@@ -333,13 +384,15 @@ orion monit
 ---
 
 ### `orion save`
-Persists the current list of active processes and their configurations to disk.
+Persists the current list of active processes, full launch configurations, and metadata to SQLite disk storage.
 
 ```bash
 orion save
+# or using opm shortcut:
+opm save
 ```
 
-This configuration is saved to the local database and used by `orion restore` and system boot scripts.
+Snapshots each process configuration into the `process_state` table in `~/.orion/orion.db`. When the server reboots or `oriond` restarts, `orion restore` reads this table to automatically bring back all supervised applications.
 
 ---
 
@@ -348,7 +401,11 @@ Restores and restarts all processes previously persisted with `orion save`.
 
 ```bash
 orion restore
+# or using opm shortcut:
+opm restore
 ```
+
+Processes already running are detected and skipped to avoid duplicate instances. Any stopped or missing processes are re-spawned with their exact saved configuration and environment.
 
 ---
 

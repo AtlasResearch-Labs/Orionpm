@@ -8,14 +8,37 @@ use crate::registry::ProcessRegistry;
 use crate::storage::Storage;
 
 /// Start the daemon: open storage, set up the process registry,
-/// launch the metrics collector and IPC server, and wait for a shutdown signal.
+/// launch background tasks and IPC server, and wait for a shutdown signal.
 pub async fn run() -> Result<()> {
     let storage = Storage::open()?;
     let logger = LogBus::new(storage.clone());
     let registry = ProcessRegistry::new();
     let shutdown = CancellationToken::new();
 
-    // Spawn the system metrics collector task.
+    // ── Restore saved processes from disk ─────────────────────────────────────
+    // On every daemon start, re-launch any processes that were saved with
+    // `orion save`. This is what survives a daemon restart or system reboot.
+    let saved_processes = storage.load_saved_processes().unwrap_or_default();
+    if saved_processes.is_empty() {
+        info!("No saved process state found — starting clean");
+    } else {
+        info!(count = saved_processes.len(), "Restoring saved processes from disk");
+        for (name, config, _restart_count, _registered_at) in saved_processes {
+            let _ = registry.register(name.clone(), config.clone());
+            if let Some(cancel_token) = registry.supervisor_cancel(&name) {
+                crate::supervisor::spawn(
+                    name.clone(),
+                    config,
+                    registry.clone(),
+                    logger.clone(),
+                    cancel_token,
+                );
+                info!(name = %name, "Process restored");
+            }
+        }
+    }
+
+    // ── Spawn the system metrics collector task ───────────────────────────────
     let metrics_registry = registry.clone();
     let metrics_shutdown = shutdown.clone();
     let metrics_logger = logger.clone();
@@ -23,7 +46,14 @@ pub async fn run() -> Result<()> {
         crate::metrics::run(metrics_registry, metrics_logger, metrics_shutdown).await;
     });
 
-    // Spawn the IPC server task.
+    // ── Spawn the log pruner task (runs every 5 minutes) ─────────────────────
+    let pruner_storage = storage.clone();
+    let pruner_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        crate::pruner::run(pruner_storage, pruner_shutdown).await;
+    });
+
+    // ── Spawn the IPC server task ─────────────────────────────────────────────
     let ipc_shutdown = shutdown.clone();
     let ipc_registry = registry.clone();
     let ipc_storage = storage.clone();
@@ -50,7 +80,6 @@ pub async fn run() -> Result<()> {
     shutdown.cancel();
 
     // Give supervised processes a grace window before the process exits.
-    // The supervisor tasks will handle sending SIGTERM to children.
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     info!("oriond exiting");

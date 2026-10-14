@@ -62,11 +62,31 @@ pub async fn run(args: LogsArgs) -> Result<()> {
 }
 
 fn print_log_line(name: &str, line: &LogLine) {
-    let secs = line.timestamp % 86400;
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    let dt = format!("{:02}:{:02}:{:02}", h, m, s);
+    // Convert Unix timestamp to UTC date+time string.
+    // We avoid pulling in chrono; derive it manually from the epoch.
+    let ts = line.timestamp;
+    let secs_per_day: u64 = 86400;
+    let days_since_epoch = ts / secs_per_day;
+    let time_of_day = ts % secs_per_day;
+
+    // Days-since-epoch → calendar date (Gregorian proleptic).
+    // Algorithm: https://howardhinnant.github.io/date_algorithms.html (civil_from_days)
+    let z = days_since_epoch as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    let h = time_of_day / 3600;
+    let min = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    let dt = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, s);
 
     let stream = match line.stream {
         LogStream::Stdout => "out",
@@ -75,3 +95,4 @@ fn print_log_line(name: &str, line: &LogLine) {
 
     println!("[{}] [{}] [{}] {}", dt, name, stream, line.text);
 }
+

@@ -123,6 +123,14 @@ impl ProcessRegistry {
         }
     }
 
+    /// Reset the restart counter for a named process to zero.
+    pub fn reset_restart_count(&self, name: &str) {
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if let Some(handle) = inner.processes.get_mut(name) {
+            handle.restart_count = 0;
+        }
+    }
+
     /// Update CPU and memory metrics for a named process.
     pub fn update_metrics(&self, name: &str, cpu_pct: f32, memory_bytes: u64) {
         let mut inner = self.inner.write().expect("registry lock poisoned");
@@ -132,10 +140,12 @@ impl ProcessRegistry {
         }
     }
 
-    /// Retrieve a snapshot of all processes.
+    /// Retrieve a snapshot of all processes, sorted by ID ascending.
     pub fn list(&self) -> Vec<ProcessInfo> {
         let inner = self.inner.read().expect("registry lock poisoned");
-        inner.processes.values().map(|h| h.to_info()).collect()
+        let mut procs: Vec<ProcessInfo> = inner.processes.values().map(|h| h.to_info()).collect();
+        procs.sort_by_key(|p| p.id);
+        procs
     }
 
     /// Retrieve a snapshot of a single process by name.
@@ -195,7 +205,24 @@ impl ProcessRegistry {
         let inner = self.inner.read().expect("registry lock poisoned");
         inner.processes.contains_key(name)
     }
+
+    /// Returns raw handle data for all processes: (name, config, restart_count, registered_at).
+    /// Used by DaemonSave to persist the current process list.
+    pub fn list_with_handles(
+        &self,
+    ) -> Vec<(String, orion_core::config::AppConfig, u32, u64)> {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        let mut result: Vec<_> = inner
+            .processes
+            .values()
+            .map(|h| (h.name.clone(), h.config.clone(), h.restart_count, h.registered_at))
+            .collect();
+        // Sort by registration time to preserve original order.
+        result.sort_by_key(|(_, _, _, registered_at)| *registered_at);
+        result
+    }
 }
+
 
 fn unix_now() -> u64 {
     SystemTime::now()

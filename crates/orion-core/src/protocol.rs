@@ -96,6 +96,10 @@ pub enum Method {
     ProcessList,
     ProcessInfo,
     ProcessLogs,
+    /// Clear stored logs for a process (orion flush).
+    ProcessFlush,
+    /// Reset the restart counter for a process (orion reset).
+    ProcessReset,
     DaemonStatus,
     DaemonSave,
     DaemonRestore,
@@ -114,6 +118,8 @@ pub enum Params {
     ProcessList(EmptyParams),
     ProcessInfo(NameParams),
     ProcessLogs(LogsParams),
+    ProcessFlush(NameParams),
+    ProcessReset(NameParams),
     DaemonStatus(EmptyParams),
     DaemonSave(EmptyParams),
     DaemonRestore(EmptyParams),
