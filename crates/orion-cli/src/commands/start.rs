@@ -221,7 +221,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
         let (command, cmd_args) = if args.target.ends_with(".js") {
             ("node".to_string(), vec![args.target.clone()])
         } else if args.target.ends_with(".py") {
-            ("python".to_string(), vec![args.target.clone()])
+            let py = if cfg!(windows) { "python" } else { "python3" };
+            (py.to_string(), vec![args.target.clone()])
         } else if args.target.ends_with(".sh") {
             ("bash".to_string(), vec![args.target.clone()])
         } else {
