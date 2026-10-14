@@ -8,20 +8,43 @@ use super::client;
 
 #[derive(Args)]
 pub struct LogsArgs {
-    /// Name or numeric ID of the process (or "all" for all processes).
+    /// Name or numeric ID of the process, or "all" for all processes [default: all].
+    #[arg(default_value = "all")]
     pub target: String,
 
-    /// Number of recent lines to display.
-    #[arg(long, short = 'n', default_value = "50")]
+    /// Number of recent lines to display per process.
+    #[arg(long, short = 'n', default_value = "15")]
     pub lines: usize,
 
-    /// Stream new log lines as they arrive (tail mode).
+    /// Stream new log lines as they arrive (default behavior).
     #[arg(long, short = 'f')]
     pub follow: bool,
+
+    /// Output recent log lines and exit without streaming.
+    #[arg(long)]
+    pub nostream: bool,
+
+    /// Raw log output without timestamps or process prefixes.
+    #[arg(long)]
+    pub raw: bool,
 }
 
 pub async fn run(args: LogsArgs) -> Result<()> {
     client::ensure_daemon().await?;
+
+    let follow = !args.nostream;
+
+    if !args.raw {
+        let stream_hint = if follow {
+            ", Ctrl+C to exit"
+        } else {
+            ""
+        };
+        eprintln!(
+            "\x1b[1;36m[TAILING]\x1b[0m Tailing last {} lines for [{}] (change with --lines <N>{})",
+            args.lines, args.target, stream_hint
+        );
+    }
 
     let req = Request::new(
         1,
@@ -29,48 +52,47 @@ pub async fn run(args: LogsArgs) -> Result<()> {
         Params::ProcessLogs(LogsParams {
             name: args.target.clone(),
             lines: args.lines,
-            follow: args.follow,
+            follow,
         }),
     );
 
-    if args.follow {
-        orion_ipc::client::stream_logs(&req, |response| {
-            if let ResponseBody::Result(ResponseResult::LogLine { name, line }) = response.body {
-                print_log_line(&name, &line);
-            }
-        })
-        .await?;
-    } else {
-        let result = client::rpc(
-            Method::ProcessLogs,
-            Params::ProcessLogs(LogsParams {
-                name: args.target.clone(),
-                lines: args.lines,
-                follow: false,
-            }),
-        )
-        .await?;
-
-        if let ResponseResult::Logs { name, lines } = result {
-            for line in lines {
-                print_log_line(&name, &line);
-            }
+    let raw = args.raw;
+    orion_ipc::client::stream_logs(&req, move |response| {
+        if let ResponseBody::Result(ResponseResult::LogLine { name, line }) = response.body {
+            print_log_line(&name, &line, raw);
         }
-    }
+    })
+    .await?;
 
     Ok(())
 }
 
-fn print_log_line(name: &str, line: &LogLine) {
-    // Convert Unix timestamp to UTC date+time string.
-    // We avoid pulling in chrono; derive it manually from the epoch.
+fn get_proc_color(name: &str) -> &'static str {
+    const COLORS: &[&str] = &[
+        "36", // Cyan
+        "32", // Green
+        "33", // Yellow
+        "35", // Magenta
+        "34", // Blue
+        "96", // Bright Cyan
+        "92", // Bright Green
+        "95", // Bright Magenta
+    ];
+    let hash: usize = name.bytes().map(|b| b as usize).sum();
+    COLORS[hash % COLORS.len()]
+}
+
+fn print_log_line(name: &str, line: &LogLine, raw: bool) {
+    if raw {
+        println!("{}", line.text);
+        return;
+    }
+
     let ts = line.timestamp;
     let secs_per_day: u64 = 86400;
     let days_since_epoch = ts / secs_per_day;
     let time_of_day = ts % secs_per_day;
 
-    // Days-since-epoch → calendar date (Gregorian proleptic).
-    // Algorithm: https://howardhinnant.github.io/date_algorithms.html (civil_from_days)
     let z = days_since_epoch as i64 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64;
@@ -87,11 +109,20 @@ fn print_log_line(name: &str, line: &LogLine) {
     let s = time_of_day % 60;
 
     let dt = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, s);
+    let color = get_proc_color(name);
 
-    let stream = match line.stream {
-        LogStream::Stdout => "out",
-        LogStream::Stderr => "err",
-    };
-
-    println!("[{}] [{}] [{}] {}", dt, name, stream, line.text);
+    match line.stream {
+        LogStream::Stdout => {
+            println!(
+                "\x1b[90m{}\x1b[0m \x1b[1;{}m{:<14}\x1b[0m \x1b[90m[out] │\x1b[0m {}",
+                dt, color, name, line.text
+            );
+        }
+        LogStream::Stderr => {
+            println!(
+                "\x1b[90m{}\x1b[0m \x1b[1;31m{:<14}\x1b[0m \x1b[1;31m[err] │\x1b[0m \x1b[31m{}\x1b[0m",
+                dt, name, line.text
+            );
+        }
+    }
 }

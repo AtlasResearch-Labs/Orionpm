@@ -306,36 +306,35 @@ async fn dispatch_request(
                 follow,
             }) = request.parse_params()
             {
-                let target_name = registry
-                    .find_name_by_id_or_name(&name)
-                    .unwrap_or_else(|| name.clone());
+                let target_name = if name == "all" || name.is_empty() {
+                    "all".to_string()
+                } else {
+                    registry
+                        .find_name_by_id_or_name(&name)
+                        .unwrap_or_else(|| name.clone())
+                };
 
-                let historical_lines = storage.get_logs(&target_name, lines).unwrap_or_default();
+                let historical_entries = storage
+                    .get_logs_with_process(&target_name, lines)
+                    .unwrap_or_default();
 
-                if !follow {
+                for (proc_name, line) in historical_entries {
                     let resp = Response::ok(
                         req_id,
-                        ResponseResult::Logs {
-                            name: target_name,
-                            lines: historical_lines,
+                        ResponseResult::LogLine {
+                            name: proc_name,
+                            line,
                         },
                     );
-                    writer.lock().await.send(&resp).await?;
-                } else {
-                    // Send historical lines first
-                    for line in historical_lines {
-                        let resp = Response::ok(
-                            req_id,
-                            ResponseResult::LogLine {
-                                name: target_name.clone(),
-                                line,
-                            },
-                        );
-                        if writer.lock().await.send(&resp).await.is_err() {
-                            return Ok(());
-                        }
+                    if writer.lock().await.send(&resp).await.is_err() {
+                        return Ok(());
                     }
+                }
 
+                if !follow {
+                    let resp = Response::ok(req_id, ResponseResult::StreamEnd);
+                    let _ = writer.lock().await.send(&resp).await;
+                } else {
                     // Subscribe to live broadcast
                     let mut rx = logger.subscribe();
                     while let Ok((proc_name, log_line)) = rx.recv().await {

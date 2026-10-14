@@ -94,39 +94,97 @@ impl Storage {
 
     /// Retrieve the most recent `limit` log lines for a named process.
     /// Lines are returned in chronological order (oldest first).
+    #[allow(dead_code)]
     pub fn get_logs(&self, name: &str, limit: usize) -> Result<Vec<LogLine>> {
+        let entries = self.get_logs_with_process(name, limit)?;
+        Ok(entries.into_iter().map(|(_, l)| l).collect())
+    }
+
+    /// Retrieve the most recent `limit` log lines, returning `(process_name, LogLine)` tuples.
+    /// If `name` is "all" or empty, retrieves up to `limit` lines per process, sorted chronologically.
+    pub fn get_logs_with_process(&self, name: &str, limit: usize) -> Result<Vec<(String, LogLine)>> {
         let conn = self.conn.lock().expect("storage lock poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT timestamp, stream, text
-             FROM (
-                 SELECT timestamp, stream, text
-                 FROM logs
-                 WHERE name = ?1
-                 ORDER BY id DESC
-                 LIMIT ?2
-             )
-             ORDER BY timestamp ASC",
-        )?;
+        if name == "all" || name.is_empty() {
+            let mut name_stmt = conn.prepare("SELECT DISTINCT name FROM logs")?;
+            let names_iter = name_stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let distinct_names: Vec<String> = names_iter.flatten().collect();
 
-        let rows = stmt.query_map(params![name, limit as i64], |row| {
-            let stream_str: String = row.get(1)?;
-            let stream = if stream_str == "stdout" {
-                LogStream::Stdout
-            } else {
-                LogStream::Stderr
-            };
-            Ok(LogLine {
-                timestamp: row.get::<_, i64>(0)? as u64,
-                stream,
-                text: row.get(2)?,
-            })
-        })?;
+            let mut all_lines = Vec::new();
+            for proc_name in distinct_names {
+                let mut stmt = conn.prepare(
+                    "SELECT id, timestamp, stream, text
+                     FROM (
+                         SELECT id, timestamp, stream, text
+                         FROM logs
+                         WHERE name = ?1
+                         ORDER BY id DESC
+                         LIMIT ?2
+                     )
+                     ORDER BY id ASC",
+                )?;
 
-        let mut lines = Vec::new();
-        for row in rows {
-            lines.push(row?);
+                let rows = stmt.query_map(params![proc_name, limit as i64], |row| {
+                    let id: i64 = row.get(0)?;
+                    let stream_str: String = row.get(2)?;
+                    let stream = if stream_str == "stdout" {
+                        LogStream::Stdout
+                    } else {
+                        LogStream::Stderr
+                    };
+                    Ok((
+                        id,
+                        proc_name.clone(),
+                        LogLine {
+                            timestamp: row.get::<_, i64>(1)? as u64,
+                            stream,
+                            text: row.get(3)?,
+                        },
+                    ))
+                })?;
+
+                for entry in rows.flatten() {
+                    all_lines.push(entry);
+                }
+            }
+
+            all_lines.sort_by_key(|(id, _, _)| *id);
+            Ok(all_lines.into_iter().map(|(_, name, line)| (name, line)).collect())
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, timestamp, stream, text
+                 FROM (
+                     SELECT id, timestamp, stream, text
+                     FROM logs
+                     WHERE name = ?1
+                     ORDER BY id DESC
+                     LIMIT ?2
+                 )
+                 ORDER BY id ASC",
+            )?;
+
+            let rows = stmt.query_map(params![name, limit as i64], |row| {
+                let stream_str: String = row.get(2)?;
+                let stream = if stream_str == "stdout" {
+                    LogStream::Stdout
+                } else {
+                    LogStream::Stderr
+                };
+                Ok((
+                    name.to_string(),
+                    LogLine {
+                        timestamp: row.get::<_, i64>(1)? as u64,
+                        stream,
+                        text: row.get(3)?,
+                    },
+                ))
+            })?;
+
+            let mut lines = Vec::new();
+            for r in rows {
+                lines.push(r?);
+            }
+            Ok(lines)
         }
-        Ok(lines)
     }
 
     /// Prune log lines for all processes, keeping only the most recent `keep`
