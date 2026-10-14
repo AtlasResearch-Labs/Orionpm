@@ -43,7 +43,7 @@ enum Command {
     Delete(commands::delete::DeleteArgs),
 
     /// List all managed processes with status and metrics.
-    #[command(alias = "ls", alias = "status")]
+    #[command(alias = "ls", alias = "status", alias = "jlist")]
     List(commands::list::ListArgs),
 
     /// Show detailed info about a single process.
@@ -58,6 +58,9 @@ enum Command {
 
     /// Reset the restart counter for a process (or all processes).
     Reset(commands::reset::ResetArgs),
+
+    /// Ping the orion daemon and check response latency.
+    Ping,
 
     /// Launch the interactive terminal monitor.
     Monit,
@@ -101,6 +104,7 @@ async fn main() -> Result<()> {
         Command::Logs(args) => commands::logs::run(args).await,
         Command::Flush(args) => commands::flush::run(args).await,
         Command::Reset(args) => commands::reset::run(args).await,
+        Command::Ping => commands::ping::run().await,
         Command::Monit => tui::run().await,
         Command::Save => commands::save::run().await,
         Command::Restore => commands::restore::run().await,

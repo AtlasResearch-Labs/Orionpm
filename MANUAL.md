@@ -15,11 +15,12 @@
    - [restart](#orion-restart)
    - [reload](#orion-reload)
    - [delete](#orion-delete)
-   - [list / ls / status](#orion-list--ls--status)
+   - [list / ls / status / jlist](#orion-list--ls--status--jlist)
    - [info / describe](#orion-info-aliases-describe)
    - [logs](#orion-logs)
    - [flush](#orion-flush)
    - [reset](#orion-reset)
+   - [ping](#orion-ping)
    - [monit](#orion-monit)
    - [save](#orion-save)
    - [restore](#orion-restore)
@@ -159,6 +160,9 @@ orion start app.js --name my-api -i max
 # Start with live reload on file edit
 orion start server.py --name backend --watch
 
+# Start with specific watch paths
+orion start app.js --name my-api --watch-path src/ --watch-path config/
+
 # Start with memory limit and environment variables
 orion start index.js --name worker --max-memory 500M --env NODE_ENV=production
 
@@ -249,14 +253,25 @@ orion del all
 
 ---
 
-### `orion list` (Aliases: `ls`, `status`)
-Displays a formatted status table of all managed processes.
+### `orion list` (Aliases: `ls`, `status`, `jlist`)
+Displays a formatted status table of all managed processes, or outputs raw JSON for scripts and CI/CD.
 
 ```bash
 orion list
 orion ls
 orion status
+
+# JSON output mode (PM2 jlist compatibility)
+orion list --json
+orion jlist
+opm list -j
 ```
+
+#### Options
+| Option | Description |
+|---|---|
+| `--full` | Show full command path instead of truncating. |
+| `-j, --json` | Output process list formatted as a JSON array. |
 
 #### Output Columns
 - **ID**: Unique numeric process index.
@@ -279,15 +294,24 @@ orion info <TARGET>
 orion describe <TARGET>
 # or using opm shortcut:
 opm describe <TARGET>
+
+# JSON metadata output mode
+orion info <TARGET> --json
 ```
 
 #### Arguments
 - `<TARGET>`: Process name or numeric ID.
 
+#### Options
+| Option | Description |
+|---|---|
+| `-j, --json` | Output full process metadata as a JSON object. |
+
 #### Example
 ```bash
 orion info my-api
 orion describe 0
+orion info my-api --json
 ```
 
 ---
@@ -363,6 +387,22 @@ orion reset my-api
 
 # Reset counters for all processes
 orion reset all
+```
+
+---
+
+### `orion ping`
+Pings the background `oriond` daemon to verify it is responsive and reports IPC round-trip latency, uptime, and managed process count.
+
+```bash
+orion ping
+# or using opm shortcut:
+opm ping
+```
+
+#### Example Output
+```text
+pong from oriond v0.1.1 (latency: 0.38ms, uptime: 14m 22s, processes: 2)
 ```
 
 ---

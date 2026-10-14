@@ -26,6 +26,10 @@ pub struct StartArgs {
     #[arg(long)]
     pub watch: bool,
 
+    /// Specific file or directory paths to watch for auto-restart (repeatable).
+    #[arg(long = "watch-path", value_name = "PATH")]
+    pub watch_paths: Vec<PathBuf>,
+
     /// Never restart this process automatically.
     #[arg(long, conflicts_with = "watch")]
     pub no_restart: bool,
@@ -64,8 +68,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
         }
 
         for (name, mut app_config) in config.apps {
-            if args.watch {
+            if args.watch || !args.watch_paths.is_empty() {
                 app_config.watch = true;
+            }
+            if !args.watch_paths.is_empty() {
+                app_config.watch_paths = args.watch_paths.clone();
             }
             if args.no_restart {
                 app_config.restart_policy = RestartPolicy::Never;
@@ -109,8 +116,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
         }
 
         for (name, mut app_config) in apps {
-            if args.watch {
+            if args.watch || !args.watch_paths.is_empty() {
                 app_config.watch = true;
+            }
+            if !args.watch_paths.is_empty() {
+                app_config.watch_paths = args.watch_paths.clone();
             }
             if args.no_restart {
                 app_config.restart_policy = RestartPolicy::Never;
@@ -180,8 +190,12 @@ pub async fn run(args: StartArgs) -> Result<()> {
             restart_delay_ms: 1000,
             max_restarts: 10,
             restart_window_secs: 60,
-            watch: args.watch,
-            watch_paths: vec![PathBuf::from(".")],
+            watch: args.watch || !args.watch_paths.is_empty(),
+            watch_paths: if args.watch_paths.is_empty() {
+                vec![PathBuf::from(".")]
+            } else {
+                args.watch_paths.clone()
+            },
             watch_ignore: vec![
                 "node_modules".into(),
                 "target".into(),
@@ -207,7 +221,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
 
     // Display status table after start
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    list::run(ListArgs { full: false }).await?;
+    list::run(ListArgs::default()).await?;
 
     Ok(())
 }

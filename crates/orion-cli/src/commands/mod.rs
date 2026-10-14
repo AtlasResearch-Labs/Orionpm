@@ -7,6 +7,7 @@ pub mod import;
 pub mod info;
 pub mod list;
 pub mod logs;
+pub mod ping;
 pub mod reload;
 pub mod reset;
 pub mod restart;

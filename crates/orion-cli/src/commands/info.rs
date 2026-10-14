@@ -9,6 +9,10 @@ use super::client;
 pub struct InfoArgs {
     /// Name or numeric ID of the process.
     pub target: String,
+
+    /// Output process metadata as JSON.
+    #[arg(long, short = 'j')]
+    pub json: bool,
 }
 
 pub async fn run(args: InfoArgs) -> Result<()> {
@@ -21,6 +25,11 @@ pub async fn run(args: InfoArgs) -> Result<()> {
     .await?;
 
     if let ResponseResult::ProcessInfo { process } = result {
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&process)?);
+            return Ok(());
+        }
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

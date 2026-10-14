@@ -77,7 +77,7 @@ pub async fn run(args: ImportArgs) -> Result<()> {
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        list::run(ListArgs { full: false }).await?;
+        list::run(ListArgs::default()).await?;
     }
 
     Ok(())
