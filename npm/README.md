@@ -50,12 +50,31 @@ Add to `package.json`:
 # Start a process
 orion start app.js --name my-app
 
+# Start with HTTP health probe auto-recovery
+orion start app.js --name my-app --health-http http://127.0.0.1:3000/healthz
+
+# Start with multi-instance cluster
+orion start app.js --name api -i 4
+
+# Scale workers up or down dynamically
+orion scale api +2
+orion scale api 2
+
+# Forward arbitrary signals
+orion sendSignal SIGHUP api
+
+# Zero-downtime daemon upgrade
+orion update
+
 # Start with live file watching and auto-restart on changes
 orion start app.js --name my-app --watch
 
 # Start directly from PM2 ecosystem file (drop-in replacement)
 orion start ecosystem.config.js
 orion start ecosystem.json
+
+# Start all services from a Procfile
+orion start Procfile
 
 # Import PM2 configuration to native orion.toml
 orion import ecosystem.config.js -o orion.toml
@@ -80,11 +99,14 @@ orion daemon kill
 
 ## Why Orion over PM2?
 
-- Single Rust Native Binary: No runtime dependencies, no V8 startup penalty, sub-second boot time.
-- Zero Memory Bloat: 15 MB RSS vs PM2's 80-150 MB baseline.
-- Drop-in PM2 Compatibility: Directly parses ecosystem.config.js and ecosystem.json.
-- 100% Free and Open Source: Zero paywalls, zero cloud upsells, zero telemetry.
-- OLED Black UI: Clean #000000 monochrome terminal monitor.
+- **Single Rust Native Binary**: No runtime dependencies, no V8 startup penalty, sub-second boot time.
+- **Zero Memory Bloat**: 15 MB RSS vs PM2's 80-150 MB baseline.
+- **HTTP & TCP Health Probes**: Native application deadlock and freeze detection with automated graceful restart.
+- **Dynamic Cluster Scaling**: Instant scaling via `orion scale <app> <N>`.
+- **Arbitrary Signal Dispatching**: Direct POSIX signal forwarding (`orion sendSignal <signal> <target>`).
+- **Drop-in PM2 & Procfile Compatibility**: Directly parses `ecosystem.config.js`, `ecosystem.json`, and standard `Procfile` formats.
+- **100% Free and Open Source**: Zero paywalls, zero cloud upsells, zero telemetry.
+- **OLED Black UI**: Clean #000000 monochrome terminal monitor.
 
 ---
 
