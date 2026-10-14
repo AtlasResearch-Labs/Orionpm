@@ -1,0 +1,18 @@
+{
+  "apps": [
+    {
+      "name": "worker-service",
+      "script": "powershell",
+      "args": "-Command \"for ($i=1; $i -le 100; $i++) { Write-Output \\\"[worker-service] Heartbeat $i\\\"; Start-Sleep -Milliseconds 500 }\"",
+      "instances": 1,
+      "watch": false,
+      "max_memory_restart": "256M",
+      "out_file": "./examples/worker.out.log",
+      "error_file": "./examples/worker.err.log",
+      "env": {
+        "ENV_MODE": "production",
+        "SERVICE_TIER": "backend"
+      }
+    }
+  ]
+}

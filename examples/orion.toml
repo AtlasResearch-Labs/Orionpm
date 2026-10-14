@@ -1,0 +1,21 @@
+# Example orion.toml
+# Copy this to your project root and adjust values.
+
+[app.api-server]
+command = "node"
+args = ["dist/server.js"]
+cwd = "/srv/api"
+instances = 1
+mode = "fork"
+restart_policy = "always"
+restart_delay_ms = 1000
+max_restarts = 10
+restart_window_secs = 60
+max_memory_mb = 512
+
+[app.api-server.env]
+NODE_ENV = "production"
+PORT = "3000"
+
+[app.api-server.alerts]
+on_crash_webhook = "https://hooks.slack.com/services/REPLACE_ME"

@@ -1,0 +1,37 @@
+{
+  "name": "orionpm",
+  "version": "0.1.1",
+  "description": "Industrial-grade Rust process manager alternative to PM2. Built by Atlas Research Labs. Built for the World.",
+  "main": "index.js",
+  "bin": {
+    "orion": "bin/orion.js",
+    "opm": "bin/opm.js",
+    "oriond": "bin/oriond.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AtlasResearch-Labs/Orionpm.git"
+  },
+  "keywords": [
+    "pm2",
+    "process-manager",
+    "rust",
+    "supervisor",
+    "daemon",
+    "monitoring",
+    "clustering",
+    "orion",
+    "atlas-research-labs"
+  ],
+  "author": "Atlas Research Labs <dev@atlasresearchlabs.online>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "index.js",
+    "README.md"
+  ]
+}

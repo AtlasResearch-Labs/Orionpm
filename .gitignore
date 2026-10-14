@@ -1,0 +1,53 @@
+# Compiled output
+/target/
+node_modules/
+npm/bin/native/
+npm/platforms/*/bin/
+*.tgz
+
+# Runtime state files — never commit these
+orion.db
+orion-*.db
+vigil.db
+vigil-*.db
+*.db-shm
+*.db-wal
+
+# Session zip archives
+*.zip
+
+# AI planning, agent files, and progress notes — never commit these
+AGENTS.md
+PROGRESS.md
+agents.md
+progress.md
+*progress*.md
+*agent*.md
+*plan*.md
+*planning*.md
+*scratch*.md
+*.scratch.md
+*.plan.md
+temp*.md
+tmp*.md
+brain/
+.system_generated/
+
+# Environment files — never commit secrets
+.env
+.env.*
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS metadata
+.DS_Store
+
+# Windows thumbnail cache
+Thumbs.db
+
+# Rust backup files
+**/*.rs.bk

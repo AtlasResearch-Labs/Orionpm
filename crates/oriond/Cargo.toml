@@ -1,0 +1,33 @@
+[package]
+name = "oriond"
+description = "Orion daemon — manages and supervises processes on behalf of the orion CLI"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "oriond"
+path = "src/main.rs"
+
+[dependencies]
+orion-core = { path = "../orion-core" }
+orion-ipc = { path = "../orion-ipc" }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+interprocess = { workspace = true }
+rusqlite = { workspace = true }
+sysinfo = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+service-manager = { workspace = true }
+notify = { workspace = true }
+lettre = { workspace = true }
+reqwest = { workspace = true }

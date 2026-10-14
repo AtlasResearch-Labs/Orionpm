@@ -1,0 +1,19 @@
+[package]
+name = "orion-ipc"
+description = "Cross-platform IPC client and server for Orion (Unix socket / Windows Named Pipe)"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+orion-core = { path = "../orion-core" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+interprocess = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }

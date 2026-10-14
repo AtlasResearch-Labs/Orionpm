@@ -1,0 +1,15 @@
+[package]
+name = "orion-core"
+description = "Shared types, config parsing, and IPC protocol for Orion"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
