@@ -30,8 +30,9 @@
    - [import](#orion-import)
 5. [Configuration File (`orion.toml`)](#5-configuration-file-oriontoml)
 6. [PM2 Ecosystem Compatibility & Migration](#6-pm2-ecosystem-compatibility--migration)
-7. [System Architecture & File Paths](#7-system-architecture--file-paths)
-8. [Troubleshooting & Common Operations](#8-troubleshooting--common-operations)
+7. [Procfile Support (Foreman / Overmind Compatibility)](#7-procfile-support-foreman--overmind-compatibility)
+8. [System Architecture & File Paths](#8-system-architecture--file-paths)
+9. [Troubleshooting & Common Operations](#9-troubleshooting--common-operations)
 
 ---
 
@@ -43,7 +44,7 @@ Orion is an industrial-grade process supervisor written in Rust. It serves as a 
 - **Dual Command Names**: Use either `orion` or the 3-letter shortcut **`opm`** (`opm list`, `opm stop`, `opm logs`).
 - **Single Native Binary**: Sub-second boot times, zero V8 engine startup penalty.
 - **Low Memory Overhead**: Baseline footprint of ~15 MB RSS compared to PM2's 80–150 MB.
-- **Drop-in PM2 Compatibility**: Directly parses `ecosystem.config.js` and `ecosystem.json` files.
+- **Drop-in PM2 & Procfile Compatibility**: Directly parses `ecosystem.config.js`, `ecosystem.json`, and standard 12-factor `Procfile` / `Procfile.dev` multi-service definitions.
 - **Embedded Logging & Metrics**: SQLite WAL-backed ring buffer log engine and OS-level CPU/memory sampling.
 - **100% Free & Open**: Zero paywalls, zero cloud upsells, zero telemetry.
 
@@ -133,7 +134,7 @@ orion start [OPTIONS] <TARGET>
 ```
 
 #### Arguments
-- `<TARGET>`: Path to a script (`app.js`, `server.py`, `binary`), an `orion.toml` config, or a PM2 ecosystem file (`ecosystem.config.js`, `ecosystem.json`).
+- `<TARGET>`: Path to a script (`app.js`, `server.py`, `binary`), an `orion.toml` config, a PM2 ecosystem file (`ecosystem.config.js`, `ecosystem.json`), or a Procfile (`Procfile`, `Procfile.dev`, `*.procfile`).
 
 #### Options
 | Option | Description |
@@ -171,6 +172,12 @@ orion start ecosystem.config.js
 
 # Start from native Orion configuration
 orion start orion.toml
+
+# Start all services from a Procfile (Foreman / Overmind style)
+orion start Procfile
+
+# Start with live file watch on a development Procfile
+orion start Procfile.dev --watch
 ```
 
 ---
@@ -608,7 +615,53 @@ orion start ecosystem.json
 
 ---
 
-## 7. System Architecture & File Paths
+## 7. Procfile Support (Foreman / Overmind Compatibility)
+
+Orion natively recognizes standard twelve-factor `Procfile` formats (popularized by Heroku, Foreman, Overmind, and Honcho). This allows multi-service development stacks (web server, background queue, worker, cache) to be launched with a single command without creating separate configuration scripts.
+
+### Recognized Filenames
+- `Procfile`
+- `Procfile.dev`
+- `Procfile.local`
+- `*.procfile` / `*.Procfile`
+
+### Syntax & Format
+Each non-empty, non-comment line defines a separate supervised process:
+```text
+<process_name>: [KEY=VALUE...] <executable> [arguments...]
+```
+
+#### Example `Procfile`:
+```text
+# Web application gateway
+web: PORT=3000 NODE_ENV=production node server.js
+
+# Background async worker
+worker: python -u worker.py --concurrency 4
+
+# Cache & queue broker
+redis: redis-server --port 6379
+```
+
+### Launching Procfiles
+```bash
+# Start all processes defined in Procfile
+orion start Procfile
+# or using opm:
+opm start Procfile
+
+# Start development Procfile with file watching enabled
+orion start Procfile.dev --watch
+
+# Apply memory limits across all Procfile services
+orion start Procfile --max-memory 512M
+```
+
+When started, Orion parses each entry, resolves any inline environment variables, registers each process under its assigned name (e.g., `web`, `worker`, `redis`), and supervises them concurrently. Standard commands (`orion list`, `orion logs web`, `orion restart worker`, `orion stop all`) manage them as native first-class processes.
+
+---
+
+## 8. System Architecture & File Paths
 
 ### Architecture
 - **`oriond`**: Daemon process running as a background service. Manages process trees, handles POSIX signals, captures I/O streams, and logs to SQLite WAL.
@@ -623,7 +676,7 @@ orion start ecosystem.json
 
 ---
 
-## 8. Troubleshooting & Common Operations
+## 9. Troubleshooting & Common Operations
 
 ### Daemon Connection Issues
 If the CLI reports `Cannot connect to oriond`:

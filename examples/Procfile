@@ -1,0 +1,10 @@
+# Example Procfile for Orion Process Manager
+# Launch all services at once with:
+#   orion start Procfile
+#   opm start Procfile
+#
+# Process syntax: <name>: [INLINE_ENV=val...] <executable> [args...]
+
+web: PORT=3000 node server.js
+worker: python -u worker.py --concurrency 4
+queue: redis-server

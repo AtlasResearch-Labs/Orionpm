@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use orion_core::config::{AppConfig, ExecutionMode, OrionConfig, RestartPolicy};
 use orion_core::pm2::{parse_memory_string, parse_pm2_ecosystem};
+use orion_core::procfile::parse_procfile;
 use orion_core::protocol::{Method, Params, StartParams};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use super::list::{self, ListArgs};
 
 #[derive(Args)]
 pub struct StartArgs {
-    /// Path to a orion.toml config file, PM2 ecosystem file, or a script to run directly.
+    /// Path to a orion.toml config file, PM2 ecosystem file, Procfile, or script to run directly.
     pub target: String,
 
     /// Name for the process (required when target is a script, not a config file).
@@ -142,8 +143,56 @@ pub async fn run(args: StartArgs) -> Result<()> {
             client::rpc(Method::ProcessStart, Params::ProcessStart(start_params)).await?;
             println!("Started process '{}'", name);
         }
+    } else if target_path.exists()
+        && (target_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|n| {
+                n.starts_with("Procfile") || n.ends_with(".procfile") || n.ends_with(".Procfile")
+            })
+            .unwrap_or(false))
+    {
+        // 3. Target is a recognized Procfile (Procfile, Procfile.dev, Procfile.local, etc.)
+        println!(
+            "Detected Procfile in '{}'. Parsing services...",
+            args.target
+        );
+        let apps = parse_procfile(target_path)
+            .with_context(|| format!("Failed to parse Procfile: {}", args.target))?;
+
+        if apps.is_empty() {
+            bail!("Procfile '{}' does not define any services", args.target);
+        }
+
+        for (name, mut app_config) in apps {
+            if args.watch || !args.watch_paths.is_empty() {
+                app_config.watch = true;
+            }
+            if !args.watch_paths.is_empty() {
+                app_config.watch_paths = args.watch_paths.clone();
+            }
+            if args.no_restart {
+                app_config.restart_policy = RestartPolicy::Never;
+            }
+            if let Some(i) = args.instances {
+                app_config.instances = i;
+            }
+            if let Some(ref m) = args.max_memory {
+                if let Some(mb) = parse_memory_string(m) {
+                    app_config.max_memory_mb = mb;
+                }
+            }
+
+            let start_params = StartParams {
+                name: name.clone(),
+                config: app_config,
+            };
+
+            client::rpc(Method::ProcessStart, Params::ProcessStart(start_params)).await?;
+            println!("Started service '{}'", name);
+        }
     } else {
-        // 3. Direct script or binary execution
+        // 4. Direct script or binary execution
         let (command, cmd_args) = if args.target.ends_with(".js") {
             ("node".to_string(), vec![args.target.clone()])
         } else if args.target.ends_with(".py") {
