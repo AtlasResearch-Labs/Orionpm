@@ -2,13 +2,13 @@ use anyhow::Result;
 use interprocess::local_socket::tokio::{SendHalf, Stream};
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::ListenerOptions;
+use orion_core::protocol::{Request, Response};
 use serde_json;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
-use orion_core::protocol::{Request, Response};
 
 use crate::get_socket_name;
 

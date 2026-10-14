@@ -18,18 +18,14 @@ async fn main() -> Result<()> {
     // Default: info level, plain text format for terminal readability.
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("ORION_LOG")
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_env("ORION_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
         .with_thread_ids(false)
         .compact()
         .init();
 
-    info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "oriond starting"
-    );
+    info!(version = env!("CARGO_PKG_VERSION"), "oriond starting");
 
     daemon::run().await
 }

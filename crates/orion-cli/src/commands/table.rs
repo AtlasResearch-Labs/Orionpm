@@ -1,11 +1,13 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use orion_core::process_state::ProcessInfo;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Format and display a clean OLED black table of managed processes.
 /// Strict rules: no emojis, no pulsing dots, no color badges, clean borders.
 pub fn print_process_table(processes: &[ProcessInfo], full_cmd: bool) {
     if processes.is_empty() {
-        println!("No managed processes found. Run 'orion start <script|config>' to start a process.");
+        println!(
+            "No managed processes found. Run 'orion start <script|config>' to start a process."
+        );
         return;
     }
 

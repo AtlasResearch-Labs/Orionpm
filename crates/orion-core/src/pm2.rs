@@ -5,7 +5,7 @@ use std::process::Command;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
-use crate::config::{AlertConfig, AppConfig, ExecutionMode, RestartPolicy, OrionConfig};
+use crate::config::{AlertConfig, AppConfig, ExecutionMode, OrionConfig, RestartPolicy};
 
 /// Parse a PM2 ecosystem file (ecosystem.config.js, ecosystem.json, pm2.json, etc.)
 /// into a map of app name to orion AppConfig.
@@ -60,8 +60,12 @@ fn read_as_json(path: &Path) -> Result<Value> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read PM2 file: {}", path.display()))?;
 
-    fallback_extract_apps(&content)
-        .ok_or_else(|| anyhow!("Failed to parse PM2 file '{}'. Ensure Node.js is installed or convert to JSON.", path.display()))
+    fallback_extract_apps(&content).ok_or_else(|| {
+        anyhow!(
+            "Failed to parse PM2 file '{}'. Ensure Node.js is installed or convert to JSON.",
+            path.display()
+        )
+    })
 }
 
 fn fallback_extract_apps(content: &str) -> Option<Value> {
@@ -132,25 +136,26 @@ fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<Stri
             }
         }
 
-        let (command, args) = if script.ends_with(".js") || script.ends_with(".cjs") || script.ends_with(".mjs") {
-            let mut a = vec![script.to_string()];
-            a.extend(extra_args);
-            ("node".to_string(), a)
-        } else if script.ends_with(".ts") {
-            let mut a = vec![script.to_string()];
-            a.extend(extra_args);
-            ("ts-node".to_string(), a)
-        } else if script.ends_with(".py") {
-            let mut a = vec![script.to_string()];
-            a.extend(extra_args);
-            ("python".to_string(), a)
-        } else if script.ends_with(".sh") {
-            let mut a = vec![script.to_string()];
-            a.extend(extra_args);
-            ("bash".to_string(), a)
-        } else {
-            (script.to_string(), extra_args)
-        };
+        let (command, args) =
+            if script.ends_with(".js") || script.ends_with(".cjs") || script.ends_with(".mjs") {
+                let mut a = vec![script.to_string()];
+                a.extend(extra_args);
+                ("node".to_string(), a)
+            } else if script.ends_with(".ts") {
+                let mut a = vec![script.to_string()];
+                a.extend(extra_args);
+                ("ts-node".to_string(), a)
+            } else if script.ends_with(".py") {
+                let mut a = vec![script.to_string()];
+                a.extend(extra_args);
+                ("python".to_string(), a)
+            } else if script.ends_with(".sh") {
+                let mut a = vec![script.to_string()];
+                a.extend(extra_args);
+                ("bash".to_string(), a)
+            } else {
+                (script.to_string(), extra_args)
+            };
 
         // Instances
         let instances = match app_val.get("instances") {

@@ -1,14 +1,14 @@
 use anyhow::Result;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
-use tracing::info;
 use orion_core::protocol::error_codes;
 use orion_core::protocol::{
     LogsParams, Method, NameParams, Request, Response, ResponseResult, StartParams,
 };
 use orion_ipc::server::ResponseWriter;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use crate::logger::LogBus;
 use crate::registry::ProcessRegistry;
@@ -238,7 +238,10 @@ async fn dispatch_request(
                         let resp = Response::ok(
                             req_id,
                             ResponseResult::Ack {
-                                message: format!("Process '{}' reloaded (zero-downtime)", target_name),
+                                message: format!(
+                                    "Process '{}' reloaded (zero-downtime)",
+                                    target_name
+                                ),
                             },
                         );
                         writer.lock().await.send(&resp).await?;
@@ -317,14 +320,17 @@ async fn dispatch_request(
         }
 
         Method::ProcessLogs => {
-            if let Ok(LogsParams { name, lines, follow }) = request.parse_params() {
+            if let Ok(LogsParams {
+                name,
+                lines,
+                follow,
+            }) = request.parse_params()
+            {
                 let target_name = registry
                     .find_name_by_id_or_name(&name)
                     .unwrap_or_else(|| name.clone());
 
-                let historical_lines = storage
-                    .get_logs(&target_name, lines)
-                    .unwrap_or_default();
+                let historical_lines = storage.get_logs(&target_name, lines).unwrap_or_default();
 
                 if !follow {
                     let resp = Response::ok(
@@ -468,7 +474,9 @@ async fn dispatch_request(
             for (name, config, restart_count, registered_at) in processes {
                 match storage.save_process(&name, &config, restart_count, registered_at) {
                     Ok(()) => saved += 1,
-                    Err(e) => tracing::warn!(name = %name, error = %e, "Failed to save process state"),
+                    Err(e) => {
+                        tracing::warn!(name = %name, error = %e, "Failed to save process state")
+                    }
                 }
             }
             let resp = Response::ok(
@@ -514,11 +522,7 @@ async fn dispatch_request(
     Ok(())
 }
 
-async fn send_not_found(
-    req_id: u64,
-    name: &str,
-    writer: Arc<Mutex<ResponseWriter>>,
-) -> Result<()> {
+async fn send_not_found(req_id: u64, name: &str, writer: Arc<Mutex<ResponseWriter>>) -> Result<()> {
     let resp = Response::err(
         req_id,
         error_codes::PROCESS_NOT_FOUND,

@@ -1,6 +1,6 @@
+use orion_core::protocol::LogLine;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use orion_core::protocol::LogLine;
 
 use crate::storage::Storage;
 

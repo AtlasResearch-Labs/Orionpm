@@ -18,7 +18,11 @@ pub async fn run(args: StartupArgs) -> Result<()> {
         println!("orion daemon startup service uninstalled.");
     } else {
         let mut exe = std::env::current_exe()?;
-        exe.set_file_name(if cfg!(windows) { "oriond.exe" } else { "oriond" });
+        exe.set_file_name(if cfg!(windows) {
+            "oriond.exe"
+        } else {
+            "oriond"
+        });
         manager.install(ServiceInstallCtx {
             label,
             program: exe,

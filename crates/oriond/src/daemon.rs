@@ -22,7 +22,10 @@ pub async fn run() -> Result<()> {
     if saved_processes.is_empty() {
         info!("No saved process state found — starting clean");
     } else {
-        info!(count = saved_processes.len(), "Restoring saved processes from disk");
+        info!(
+            count = saved_processes.len(),
+            "Restoring saved processes from disk"
+        );
         for (name, config, _restart_count, _registered_at) in saved_processes {
             let _ = registry.register(name.clone(), config.clone());
             if let Some(cancel_token) = registry.supervisor_cancel(&name) {
@@ -59,7 +62,9 @@ pub async fn run() -> Result<()> {
     let ipc_storage = storage.clone();
     let ipc_logger = logger.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::handlers::serve(ipc_registry, ipc_storage, ipc_logger, ipc_shutdown).await {
+        if let Err(e) =
+            crate::handlers::serve(ipc_registry, ipc_storage, ipc_logger, ipc_shutdown).await
+        {
             tracing::error!(error = %e, "IPC server exited with error");
         }
     });
@@ -92,8 +97,8 @@ async fn shutdown_signal() {
     {
         use tokio::signal::unix::{signal, SignalKind};
 
-        let mut sigterm = signal(SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
 
         tokio::select! {
             _ = signal::ctrl_c() => {}

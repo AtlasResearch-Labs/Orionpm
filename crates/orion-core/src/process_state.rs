@@ -148,11 +148,18 @@ mod tests {
             ProcessState::Running { pid: 1 },
             ProcessState::Stopping,
             ProcessState::Stopped,
-            ProcessState::Errored { exit_code: Some(1), message: "crash".to_string() },
+            ProcessState::Errored {
+                exit_code: Some(1),
+                message: "crash".to_string(),
+            },
         ];
         for state in &states {
             let label = state.label();
-            assert!(label.is_ascii(), "label '{}' contains non-ASCII characters", label);
+            assert!(
+                label.is_ascii(),
+                "label '{}' contains non-ASCII characters",
+                label
+            );
             assert!(!label.is_empty(), "label must not be empty");
         }
     }

@@ -47,7 +47,8 @@ impl Storage {
     fn initialize_schema(&self) -> Result<()> {
         let conn = self.conn.lock().expect("storage lock poisoned");
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS logs (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 name      TEXT    NOT NULL,
@@ -69,7 +70,8 @@ impl Storage {
                 restart_count  INTEGER NOT NULL DEFAULT 0,
                 registered_at  INTEGER NOT NULL
             );
-        ")?;
+        ",
+        )?;
 
         Ok(())
     }

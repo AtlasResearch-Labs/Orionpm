@@ -109,6 +109,7 @@ pub enum Method {
 /// Parameters for each IPC method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum Params {
     ProcessStart(StartParams),
     ProcessStop(NameParams),
@@ -154,7 +155,9 @@ pub struct LogsParams {
     pub follow: bool,
 }
 
-fn default_log_lines() -> usize { 50 }
+fn default_log_lines() -> usize {
+    50
+}
 
 /// All possible result payloads from the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]

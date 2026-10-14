@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use orion_core::config::{AppConfig, ExecutionMode, RestartPolicy, OrionConfig};
+use orion_core::config::{AppConfig, ExecutionMode, OrionConfig, RestartPolicy};
 use orion_core::pm2::{parse_memory_string, parse_pm2_ecosystem};
 use orion_core::protocol::{Method, Params, StartParams};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use super::client;
 use super::list::{self, ListArgs};
@@ -94,12 +94,18 @@ pub async fn run(args: StartArgs) -> Result<()> {
             || args.target.ends_with("pm2.json"))
     {
         // 2. Target is a recognized PM2 ecosystem file
-        println!("Detected PM2 configuration in '{}'. Parsing applications...", args.target);
+        println!(
+            "Detected PM2 configuration in '{}'. Parsing applications...",
+            args.target
+        );
         let apps = parse_pm2_ecosystem(target_path)
             .with_context(|| format!("Failed to parse PM2 configuration: {}", args.target))?;
 
         if apps.is_empty() {
-            bail!("PM2 configuration '{}' does not define any apps", args.target);
+            bail!(
+                "PM2 configuration '{}' does not define any apps",
+                args.target
+            );
         }
 
         for (name, mut app_config) in apps {

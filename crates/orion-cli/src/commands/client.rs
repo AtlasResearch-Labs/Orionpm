@@ -1,11 +1,15 @@
 use anyhow::{bail, Context, Result};
-use std::time::{Duration, Instant};
 use orion_core::protocol::{EmptyParams, Method, Params, Request, ResponseBody, ResponseResult};
+use std::time::{Duration, Instant};
 
 /// Ensure that oriond is running; if not, spawn it in the background
 /// and wait until the IPC socket is ready.
 pub async fn ensure_daemon() -> Result<()> {
-    let ping = Request::new(0, Method::DaemonStatus, Params::DaemonStatus(EmptyParams {}));
+    let ping = Request::new(
+        0,
+        Method::DaemonStatus,
+        Params::DaemonStatus(EmptyParams {}),
+    );
     if orion_ipc::client::send(&ping).await.is_ok() {
         return Ok(());
     }
@@ -28,7 +32,11 @@ pub async fn ensure_daemon() -> Result<()> {
 
 fn spawn_daemon() -> Result<()> {
     let mut exe = std::env::current_exe()?;
-    exe.set_file_name(if cfg!(windows) { "oriond.exe" } else { "oriond" });
+    exe.set_file_name(if cfg!(windows) {
+        "oriond.exe"
+    } else {
+        "oriond"
+    });
 
     let mut cmd = if exe.exists() {
         std::process::Command::new(exe)

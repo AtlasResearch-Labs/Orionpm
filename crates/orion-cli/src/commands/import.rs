@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::path::PathBuf;
 use orion_core::pm2::{parse_pm2_ecosystem, to_orion_toml};
 use orion_core::protocol::{Method, Params, StartParams};
+use std::path::PathBuf;
 
 use super::client;
 use super::list::{self, ListArgs};
@@ -23,12 +23,22 @@ pub struct ImportArgs {
 
 pub async fn run(args: ImportArgs) -> Result<()> {
     if !args.source.exists() {
-        anyhow::bail!("Source configuration file '{}' does not exist", args.source.display());
+        anyhow::bail!(
+            "Source configuration file '{}' does not exist",
+            args.source.display()
+        );
     }
 
-    println!("Importing PM2 configuration from '{}'...", args.source.display());
-    let apps = parse_pm2_ecosystem(&args.source)
-        .with_context(|| format!("Failed to parse PM2 configuration from '{}'", args.source.display()))?;
+    println!(
+        "Importing PM2 configuration from '{}'...",
+        args.source.display()
+    );
+    let apps = parse_pm2_ecosystem(&args.source).with_context(|| {
+        format!(
+            "Failed to parse PM2 configuration from '{}'",
+            args.source.display()
+        )
+    })?;
 
     if apps.is_empty() {
         anyhow::bail!("No applications found in '{}'", args.source.display());
@@ -36,14 +46,24 @@ pub async fn run(args: ImportArgs) -> Result<()> {
 
     println!("Discovered {} managed application(s):", apps.len());
     for (name, app) in &apps {
-        println!("  - {} (command: '{}', instances: {}, mode: {:?})", name, app.command, app.instances, app.mode);
+        println!(
+            "  - {} (command: '{}', instances: {}, mode: {:?})",
+            name, app.command, app.instances, app.mode
+        );
     }
 
     let toml_content = to_orion_toml(&apps)?;
-    std::fs::write(&args.output, toml_content)
-        .with_context(|| format!("Failed to write output config to '{}'", args.output.display()))?;
+    std::fs::write(&args.output, toml_content).with_context(|| {
+        format!(
+            "Failed to write output config to '{}'",
+            args.output.display()
+        )
+    })?;
 
-    println!("Successfully exported native configuration to '{}'.", args.output.display());
+    println!(
+        "Successfully exported native configuration to '{}'.",
+        args.output.display()
+    );
 
     if args.start {
         println!("Starting all imported applications...");

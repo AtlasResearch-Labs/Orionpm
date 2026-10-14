@@ -1,10 +1,10 @@
 use anyhow::Result;
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::traits::tokio::Stream as _;
+use orion_core::protocol::{Request, Response};
 use serde_json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error};
-use orion_core::protocol::{Request, Response};
 
 use crate::get_socket_name;
 
@@ -14,14 +14,9 @@ use crate::get_socket_name;
 /// If the daemon is not running, this returns an error with a clear message.
 pub async fn send(request: &Request) -> Result<Response> {
     let name = get_socket_name()?;
-    let stream = Stream::connect(name)
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Cannot connect to orion daemon. Is oriond running? ({})",
-                e
-            )
-        })?;
+    let stream = Stream::connect(name).await.map_err(|e| {
+        anyhow::anyhow!("Cannot connect to orion daemon. Is oriond running? ({})", e)
+    })?;
 
     let (reader, mut writer) = stream.split();
     let mut buf_reader = BufReader::new(reader);
@@ -40,7 +35,9 @@ pub async fn send(request: &Request) -> Result<Response> {
     buf_reader.read_line(&mut line).await?;
 
     if line.is_empty() {
-        return Err(anyhow::anyhow!("Daemon closed the connection without responding"));
+        return Err(anyhow::anyhow!(
+            "Daemon closed the connection without responding"
+        ));
     }
 
     let response: Response = serde_json::from_str(line.trim()).map_err(|e| {
@@ -58,14 +55,9 @@ where
     F: FnMut(Response),
 {
     let name = get_socket_name()?;
-    let stream = Stream::connect(name)
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Cannot connect to orion daemon. Is oriond running? ({})",
-                e
-            )
-        })?;
+    let stream = Stream::connect(name).await.map_err(|e| {
+        anyhow::anyhow!("Cannot connect to orion daemon. Is oriond running? ({})", e)
+    })?;
 
     let (reader, mut writer) = stream.split();
     let mut buf_reader = BufReader::new(reader);

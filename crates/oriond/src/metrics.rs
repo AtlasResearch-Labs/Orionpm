@@ -1,10 +1,10 @@
+use orion_core::process_state::ProcessState;
+use orion_core::protocol::{LogLine, LogStream};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use orion_core::process_state::ProcessState;
-use orion_core::protocol::{LogLine, LogStream};
 
 use crate::logger::LogBus;
 use crate::registry::ProcessRegistry;
@@ -82,7 +82,8 @@ pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: Cancellati
                                 let current_mem = mem;
                                 let limit = config.max_memory_mb;
                                 tokio::spawn(async move {
-                                    send_high_memory_webhook(&url, &app_name, current_mem, limit).await;
+                                    send_high_memory_webhook(&url, &app_name, current_mem, limit)
+                                        .await;
                                 });
                             }
 
@@ -110,7 +111,8 @@ pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: Cancellati
                             let current_cpu = cpu;
                             let threshold = config.max_cpu_pct;
                             tokio::spawn(async move {
-                                send_high_cpu_webhook(&url, &app_name, current_cpu, threshold).await;
+                                send_high_cpu_webhook(&url, &app_name, current_cpu, threshold)
+                                    .await;
                             });
                         }
                     }

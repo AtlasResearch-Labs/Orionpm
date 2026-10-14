@@ -14,6 +14,10 @@ const PLATFORM_MAP = {
     assetName: 'orion-linux-x86_64.tar.gz',
     binaries: ['orion', 'oriond'],
   },
+  'linux-arm64': {
+    assetName: 'orion-linux-arm64.tar.gz',
+    binaries: ['orion', 'oriond'],
+  },
   'darwin-arm64': {
     assetName: 'orion-macos-arm64.tar.gz',
     binaries: ['orion', 'oriond'],

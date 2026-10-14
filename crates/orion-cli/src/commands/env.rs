@@ -20,7 +20,10 @@ pub async fn run(args: EnvArgs) -> Result<()> {
     .await?;
 
     if let ResponseResult::ProcessInfo { process } = result {
-        println!("Environment for process '{}' (id: {}):", process.name, process.id);
+        println!(
+            "Environment for process '{}' (id: {}):",
+            process.name, process.id
+        );
         println!("  Command: {}", process.command);
         println!("  Mode:    {}", process.mode);
         println!("  Status:  {}", process.state.label());

@@ -173,12 +173,24 @@ pub struct SmtpConfig {
 
 // --- Default value functions used by serde ---
 
-fn default_instances() -> u32 { 1 }
-fn default_restart_delay_ms() -> u64 { 1000 }
-fn default_max_restarts() -> u32 { 10 }
-fn default_restart_window_secs() -> u64 { 60 }
-fn default_log_lines() -> usize { 1000 }
-fn default_true() -> bool { true }
+fn default_instances() -> u32 {
+    1
+}
+fn default_restart_delay_ms() -> u64 {
+    1000
+}
+fn default_max_restarts() -> u32 {
+    10
+}
+fn default_restart_window_secs() -> u64 {
+    60
+}
+fn default_log_lines() -> usize {
+    1000
+}
+fn default_true() -> bool {
+    true
+}
 
 fn default_watch_paths() -> Vec<PathBuf> {
     vec![PathBuf::from(".")]
@@ -203,6 +215,7 @@ impl OrionConfig {
     }
 
     /// Parse a orion.toml from a raw TOML string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(raw: &str) -> Result<Self> {
         toml::from_str(raw).context("Failed to parse orion.toml")
     }
@@ -276,7 +289,10 @@ mod tests {
         "#;
         let config = OrionConfig::from_str(raw).expect("parse failed");
         let errors = config.validate();
-        assert!(!errors.is_empty(), "expected validation error for empty command");
+        assert!(
+            !errors.is_empty(),
+            "expected validation error for empty command"
+        );
     }
 
     #[test]

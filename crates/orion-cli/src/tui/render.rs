@@ -132,15 +132,13 @@ fn render_processes_table(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
         Constraint::Length(8),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header_row)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Managed Processes ")
-                .title_style(Style::default().fg(Color::Rgb(160, 160, 160)))
-                .border_style(Style::default().fg(Color::Rgb(50, 50, 50))),
-        );
+    let table = Table::new(rows, widths).header(header_row).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Managed Processes ")
+            .title_style(Style::default().fg(Color::Rgb(160, 160, 160)))
+            .border_style(Style::default().fg(Color::Rgb(50, 50, 50))),
+    );
 
     f.render_widget(table, area);
 }
@@ -166,11 +164,22 @@ fn render_logs_view(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     LogStream::Stderr => "err",
                 };
                 let secs = l.timestamp % 86400;
-                let ts = format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60);
+                let ts = format!(
+                    "{:02}:{:02}:{:02}",
+                    secs / 3600,
+                    (secs % 3600) / 60,
+                    secs % 60
+                );
 
                 Line::from(vec![
-                    Span::styled(format!("[{}] ", ts), Style::default().fg(Color::Rgb(90, 90, 90))),
-                    Span::styled(format!("[{}] ", stream_tag), Style::default().fg(Color::Rgb(130, 130, 130))),
+                    Span::styled(
+                        format!("[{}] ", ts),
+                        Style::default().fg(Color::Rgb(90, 90, 90)),
+                    ),
+                    Span::styled(
+                        format!("[{}] ", stream_tag),
+                        Style::default().fg(Color::Rgb(130, 130, 130)),
+                    ),
                     Span::styled(&l.text, Style::default().fg(Color::Rgb(210, 210, 210))),
                 ])
             })

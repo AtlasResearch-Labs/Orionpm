@@ -7,11 +7,11 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use orion_core::protocol::{EmptyParams, LogsParams, Method, NameParams, Params, ResponseResult};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::stdout;
 use std::time::{Duration, Instant};
-use orion_core::protocol::{EmptyParams, LogsParams, Method, NameParams, Params, ResponseResult};
 
 use crate::commands::client;
 use app::App;
@@ -90,9 +90,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                 let name = proc.name.clone();
                                 let _ = client::rpc(
                                     Method::ProcessRestart,
-                                    Params::ProcessRestart(NameParams {
-                                        name: name.clone(),
-                                    }),
+                                    Params::ProcessRestart(NameParams { name: name.clone() }),
                                 )
                                 .await;
                                 app.status_message = Some(format!("Restarted process '{}'", name));
@@ -104,9 +102,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                 let name = proc.name.clone();
                                 let _ = client::rpc(
                                     Method::ProcessStop,
-                                    Params::ProcessStop(NameParams {
-                                        name: name.clone(),
-                                    }),
+                                    Params::ProcessStop(NameParams { name: name.clone() }),
                                 )
                                 .await;
                                 app.status_message = Some(format!("Stopped process '{}'", name));

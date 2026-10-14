@@ -69,7 +69,10 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
             );
             match orion_ipc::client::send(&req).await {
                 Ok(resp) => {
-                    if let orion_core::protocol::ResponseBody::Result(ResponseResult::Ack { message }) = resp.body {
+                    if let orion_core::protocol::ResponseBody::Result(ResponseResult::Ack {
+                        message,
+                    }) = resp.body
+                    {
                         println!("{}", message);
                     }
                 }

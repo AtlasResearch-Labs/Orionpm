@@ -11,7 +11,10 @@ pub async fn run(storage: Storage, shutdown: CancellationToken) {
     const PRUNE_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
     const KEEP_LINES_PER_PROCESS: usize = 10_000;
 
-    info!("Log pruner started (interval=5min, keep={} lines/process)", KEEP_LINES_PER_PROCESS);
+    info!(
+        "Log pruner started (interval=5min, keep={} lines/process)",
+        KEEP_LINES_PER_PROCESS
+    );
 
     loop {
         tokio::select! {

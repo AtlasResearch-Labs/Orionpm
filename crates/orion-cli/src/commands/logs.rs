@@ -95,4 +95,3 @@ fn print_log_line(name: &str, line: &LogLine) {
 
     println!("[{}] [{}] [{}] {}", dt, name, stream, line.text);
 }
-

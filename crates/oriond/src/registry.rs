@@ -157,7 +157,10 @@ impl ProcessRegistry {
     /// Returns the cancellation token for a named process's supervisor task.
     pub fn supervisor_cancel(&self, name: &str) -> Option<tokio_util::sync::CancellationToken> {
         let inner = self.inner.read().expect("registry lock poisoned");
-        inner.processes.get(name).map(|h| h.supervisor_cancel.clone())
+        inner
+            .processes
+            .get(name)
+            .map(|h| h.supervisor_cancel.clone())
     }
 
     /// Remove a process from the registry. Returns false if not found.
@@ -208,21 +211,25 @@ impl ProcessRegistry {
 
     /// Returns raw handle data for all processes: (name, config, restart_count, registered_at).
     /// Used by DaemonSave to persist the current process list.
-    pub fn list_with_handles(
-        &self,
-    ) -> Vec<(String, orion_core::config::AppConfig, u32, u64)> {
+    pub fn list_with_handles(&self) -> Vec<(String, orion_core::config::AppConfig, u32, u64)> {
         let inner = self.inner.read().expect("registry lock poisoned");
         let mut result: Vec<_> = inner
             .processes
             .values()
-            .map(|h| (h.name.clone(), h.config.clone(), h.restart_count, h.registered_at))
+            .map(|h| {
+                (
+                    h.name.clone(),
+                    h.config.clone(),
+                    h.restart_count,
+                    h.registered_at,
+                )
+            })
             .collect();
         // Sort by registration time to preserve original order.
         result.sort_by_key(|(_, _, _, registered_at)| *registered_at);
         result
     }
 }
-
 
 fn unix_now() -> u64 {
     SystemTime::now()
