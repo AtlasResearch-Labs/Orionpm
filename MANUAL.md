@@ -15,6 +15,9 @@
    - [restart](#orion-restart)
    - [reload](#orion-reload)
    - [delete](#orion-delete)
+   - [scale](#orion-scale)
+   - [sendSignal / signal](#orion-sendsignal-alias-signal)
+   - [update](#orion-update)
    - [list / ls / status / jlist](#orion-list--ls--status--jlist)
    - [info / describe](#orion-info-aliases-describe)
    - [logs](#orion-logs)
@@ -149,6 +152,10 @@ orion start [OPTIONS] <TARGET>
 | `--cwd <PATH>` | Set working directory for the process. |
 | `--out <PATH>` | Mirror stdout stream to a specific file. |
 | `--error <PATH>` | Mirror stderr stream to a specific file. |
+| `--health-http <URL>` | HTTP URL to periodically probe (e.g. `http://127.0.0.1:3000/healthz`). Restarts process on failure. |
+| `--health-tcp <HOST:PORT>` | TCP host:port to periodically probe (e.g. `127.0.0.1:5432`). |
+| `--health-interval <SECS>` | Interval in seconds between health probes (default: 10s). |
+| `--health-max-failures <N>` | Consecutive probe failures before triggering auto-recovery restart (default: 3). |
 
 #### Examples
 ```bash
@@ -157,6 +164,12 @@ orion start app.js --name my-api
 
 # Start with cluster mode across all CPU cores
 orion start app.js --name my-api -i max
+
+# Start with HTTP health probe auto-recovery
+orion start app.js --name my-api --health-http http://127.0.0.1:3000/healthz --health-interval 5
+
+# Start with TCP health probe on database or service
+orion start server.py --name backend --health-tcp 127.0.0.1:8000
 
 # Start with live reload on file edit
 orion start server.py --name backend --watch
@@ -257,6 +270,77 @@ orion delete my-api
 orion rm 0
 orion del all
 ```
+
+---
+
+### `orion scale`
+Dynamically scales worker instances for an application up or down in real time. Can scale to an absolute number of instances or apply relative increments/decrements.
+
+```bash
+orion scale <TARGET> <COUNT>
+# or using opm shortcut:
+opm scale <TARGET> <COUNT>
+```
+
+#### Arguments
+- `<TARGET>`: Application or process name (e.g. `web`, `api`).
+- `<COUNT>`: Target instance count (e.g. `4`), or delta increment/decrement (e.g. `+2`, `-1`).
+
+#### Examples
+```bash
+# Scale web to exactly 4 instances
+orion scale web 4
+
+# Scale up by adding 2 instances
+orion scale web +2
+
+# Scale down by removing 1 instance
+orion scale web -1
+```
+
+---
+
+### `orion sendSignal` (Alias: `signal`)
+Sends an arbitrary POSIX or system signal to a managed process, cluster worker, or all processes.
+
+```bash
+orion sendSignal <SIGNAL> <TARGET>
+orion signal <SIGNAL> <TARGET>
+# or using opm shortcut:
+opm signal <SIGNAL> <TARGET>
+```
+
+#### Arguments
+- `<SIGNAL>`: POSIX signal name (`SIGUSR1`, `SIGUSR2`, `SIGHUP`, `SIGTERM`, `SIGINT`, etc.) or numeric code (`1`, `2`, `15`, `9`).
+- `<TARGET>`: Process name, numeric ID, cluster worker name (`web-0`), or `all`.
+
+#### Examples
+```bash
+# Send SIGHUP to trigger configuration reload in a worker
+orion sendSignal SIGHUP api
+
+# Send SIGUSR2 to web-0 for custom telemetry dump
+orion signal SIGUSR2 web-0
+
+# Send SIGTERM to all managed processes
+opm signal SIGTERM all
+```
+
+---
+
+### `orion update`
+Performs an in-place daemon binary upgrade without dropping running child processes. Orion snapshots the active process table to disk, checks or starts the updated daemon binary, and seamlessly restores state.
+
+```bash
+orion update
+# or using opm shortcut:
+opm update
+```
+
+#### Features
+- Automatically snapshots running services to disk before restart.
+- Preserves all running service definitions, environments, and watch triggers.
+- Essential for seamless zero-downtime infrastructure upgrades when upgrading `npm i -g orionpm`.
 
 ---
 
@@ -560,9 +644,16 @@ mode = "cluster"                  # "fork" or "cluster"
 restart_policy = "always"         # "always", "on-failure", "never"
 restart_delay_ms = 1000
 max_restarts = 10
-restart_window_secs = 60
+restart_window_secs = 60          # sliding window tracking restarts; exponential backoff caps thrashing loops
 max_memory_mb = 512
 max_cpu_pct = 90.0
+
+[app.api-service.health]
+http = "http://127.0.0.1:3000/healthz"  # Periodic HTTP liveness probe (200-399 OK)
+# tcp = "127.0.0.1:3000"                # Or TCP socket connectivity probe
+interval_secs = 10                      # Frequency of probe checks (default: 10s)
+timeout_secs = 3                        # Probe connection timeout (default: 3s)
+max_failures = 3                        # Consecutive failures before auto-recovering child (default: 3)
 
 [app.api-service.env]
 NODE_ENV = "production"
@@ -580,6 +671,12 @@ password_env = "ORION_SMTP_PASSWORD"
 from = "Orion Alerts <alerts@yourdomain.com>"
 tls = true
 ```
+
+### Self-Healing & Deadlock Detection
+Unlike legacy process managers that only monitor OS process death, Orion continuously probes application layer health via HTTP or TCP. If your service encounters an event-loop stall, thread deadlock, or database connection starvation:
+1. Orion's background probe records consecutive failed checks.
+2. Once `max_failures` is reached, Orion logs an alert and automatically initiates a graceful restart sequence.
+3. Rapid crash loops are throttled via an exponential backoff formula (`1s << min(restarts, 4)` up to 30s) across a rolling `restart_window_secs`, preventing catastrophic cascading failures.
 
 ### Starting from Config
 ```bash

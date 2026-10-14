@@ -13,7 +13,11 @@ pub mod reset;
 pub mod restart;
 pub mod restore;
 pub mod save;
+pub mod scale;
+pub mod send_signal;
 pub mod start;
 pub mod startup;
 pub mod stop;
 pub mod table;
+pub mod update;
+

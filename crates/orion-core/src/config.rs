@@ -100,6 +100,10 @@ pub struct AppConfig {
     /// Alert configuration for this app.
     #[serde(default)]
     pub alerts: AlertConfig,
+
+    /// Health check probe configuration for this app (HTTP or TCP).
+    #[serde(default)]
+    pub health: Option<HealthConfig>,
 }
 
 /// Execution mode for a managed process.
@@ -169,6 +173,40 @@ pub struct SmtpConfig {
     /// Whether to use TLS. Default: true.
     #[serde(default = "default_true")]
     pub tls: bool,
+}
+
+/// Health check probe configuration for a managed process.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct HealthConfig {
+    /// HTTP URL to check periodically (e.g. "http://127.0.0.1:3000/healthz").
+    pub http: Option<String>,
+
+    /// TCP host:port to check periodically (e.g. "127.0.0.1:5432").
+    pub tcp: Option<String>,
+
+    /// Seconds between health checks (default: 10s).
+    #[serde(default = "default_health_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Timeout in seconds per check (default: 3s).
+    #[serde(default = "default_health_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Consecutive failures before restarting (default: 3).
+    #[serde(default = "default_health_max_failures")]
+    pub max_failures: u32,
+}
+
+fn default_health_interval_secs() -> u64 {
+    10
+}
+
+fn default_health_timeout_secs() -> u64 {
+    3
+}
+
+fn default_health_max_failures() -> u32 {
+    3
 }
 
 // --- Default value functions used by serde ---
@@ -310,5 +348,29 @@ mod tests {
             errors.iter().any(|e| e.contains("smtp")),
             "expected smtp validation error"
         );
+    }
+
+    #[test]
+    fn parse_health_and_restart_window_config() {
+        let raw = r#"
+            [app.api]
+            command = "cargo run"
+            restart_window_secs = 120
+
+            [app.api.health]
+            http = "http://127.0.0.1:8080/health"
+            interval_secs = 5
+            timeout_secs = 2
+            max_failures = 5
+        "#;
+        let config = OrionConfig::from_str(raw).expect("parse failed");
+        let app = config.apps.get("api").expect("app not found");
+        assert_eq!(app.restart_window_secs, 120);
+        let health = app.health.as_ref().expect("health config missing");
+        assert_eq!(health.http.as_deref(), Some("http://127.0.0.1:8080/health"));
+        assert_eq!(health.tcp, None);
+        assert_eq!(health.interval_secs, 5);
+        assert_eq!(health.timeout_secs, 2);
+        assert_eq!(health.max_failures, 5);
     }
 }

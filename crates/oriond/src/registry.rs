@@ -187,6 +187,56 @@ impl ProcessRegistry {
         }
     }
 
+    /// Resolve target (name, numeric ID, cluster prefix, or "all") to matching process names.
+    pub fn resolve_targets(&self, target: &str) -> Vec<String> {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        if target == "all" {
+            let mut all: Vec<_> = inner.processes.keys().cloned().collect();
+            all.sort();
+            return all;
+        }
+
+        // Direct exact match
+        if inner.processes.contains_key(target) {
+            return vec![target.to_string()];
+        }
+
+        // Numeric ID match
+        if let Ok(id) = target.parse::<u32>() {
+            for (name, handle) in &inner.processes {
+                if handle.id == id {
+                    return vec![name.clone()];
+                }
+            }
+        }
+
+        // Cluster prefix match: e.g. target "web" matches "web-0", "web-1", "web#0"
+        let prefix_dash = format!("{}-", target);
+        let prefix_hash = format!("{}#", target);
+        let mut matches: Vec<String> = inner
+            .processes
+            .keys()
+            .filter(|name| name.starts_with(&prefix_dash) || name.starts_with(&prefix_hash))
+            .cloned()
+            .collect();
+
+        if !matches.is_empty() {
+            matches.sort();
+            return matches;
+        }
+
+        Vec::new()
+    }
+
+    /// Retrieve the OS PID for a process if it is currently running.
+    pub fn get_pid(&self, name: &str) -> Option<u32> {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        inner.processes.get(name).and_then(|h| match h.state {
+            ProcessState::Running { pid } => Some(pid),
+            _ => None,
+        })
+    }
+
     /// Resolve target (name or numeric ID) to the process name.
     pub fn find_name_by_id_or_name(&self, target: &str) -> Option<String> {
         let inner = self.inner.read().expect("registry lock poisoned");

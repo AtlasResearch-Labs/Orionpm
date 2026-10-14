@@ -23,6 +23,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Start a process from a config file or a script path.
     Start(commands::start::StartArgs),
@@ -85,6 +86,16 @@ enum Command {
 
     /// Import and convert PM2 ecosystem configurations.
     Import(commands::import::ImportArgs),
+
+    /// Send an arbitrary POSIX signal to a managed process.
+    #[command(alias = "signal")]
+    SendSignal(commands::send_signal::SendSignalArgs),
+
+    /// Scale a process or cluster up or down dynamically.
+    Scale(commands::scale::ScaleArgs),
+
+    /// Perform zero-downtime in-place upgrade of the orion daemon.
+    Update,
 }
 
 #[tokio::main]
@@ -122,6 +133,9 @@ async fn main() -> Result<()> {
         Command::Env(args) => commands::env::run(args).await,
         Command::Daemon(args) => commands::daemon::run(args).await,
         Command::Import(args) => commands::import::run(args).await,
+        Command::SendSignal(args) => commands::send_signal::run(args).await,
+        Command::Scale(args) => commands::scale::run(args).await,
+        Command::Update => commands::update::run().await,
     };
 
     if let Err(e) = res {

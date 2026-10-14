@@ -1,7 +1,8 @@
 use anyhow::Result;
 use orion_core::protocol::error_codes;
 use orion_core::protocol::{
-    LogsParams, Method, NameParams, Request, Response, ResponseResult, StartParams,
+    LogsParams, Method, NameParams, Request, Response, ResponseResult, ScaleParams,
+    SendSignalParams, StartParams,
 };
 use orion_ipc::server::ResponseWriter;
 use std::sync::Arc;
@@ -98,32 +99,26 @@ async fn dispatch_request(
 
         Method::ProcessStop => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                if name == "all" {
-                    for proc in registry.list() {
-                        if let Some(cancel) = registry.supervisor_cancel(&proc.name) {
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
+                    for target_name in &targets {
+                        if let Some(cancel) = registry.supervisor_cancel(target_name) {
                             cancel.cancel();
                         }
                     }
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: "All processes stopping".to_string(),
+                            message: if targets.len() == 1 {
+                                format!("Process '{}' stopping", targets[0])
+                            } else {
+                                format!("{} processes stopping", targets.len())
+                            },
                         },
                     );
                     writer.lock().await.send(&resp).await?;
-                } else if let Some(target_name) = registry.find_name_by_id_or_name(&name) {
-                    if let Some(cancel) = registry.supervisor_cancel(&target_name) {
-                        cancel.cancel();
-                    }
-                    let resp = Response::ok(
-                        req_id,
-                        ResponseResult::Ack {
-                            message: format!("Process '{}' stopping", target_name),
-                        },
-                    );
-                    writer.lock().await.send(&resp).await?;
-                } else {
-                    send_not_found(req_id, &name, writer).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -132,15 +127,20 @@ async fn dispatch_request(
 
         Method::ProcessRestart => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                if name == "all" {
-                    for proc in registry.list() {
-                        if let Some(config) = registry.get_config(&proc.name) {
-                            if let Some(cancel) = registry.supervisor_cancel(&proc.name) {
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
+                    for target_name in &targets {
+                        if let Some(config) = registry.get_config(target_name) {
+                            if let Some(cancel) = registry.supervisor_cancel(target_name) {
                                 cancel.cancel();
                             }
-                            if let Some(new_token) = registry.reset_cancel_token(&proc.name) {
+                            // Pause to allow socket release
+                            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                            if let Some(new_token) = registry.reset_cancel_token(target_name) {
                                 crate::supervisor::spawn(
-                                    proc.name.clone(),
+                                    target_name.clone(),
                                     config,
                                     registry.clone(),
                                     logger.clone(),
@@ -152,38 +152,14 @@ async fn dispatch_request(
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: "All processes restarted".to_string(),
+                            message: if targets.len() == 1 {
+                                format!("Process '{}' restarted", targets[0])
+                            } else {
+                                format!("{} processes restarted", targets.len())
+                            },
                         },
                     );
                     writer.lock().await.send(&resp).await?;
-                } else if let Some(target_name) = registry.find_name_by_id_or_name(&name) {
-                    if let Some(config) = registry.get_config(&target_name) {
-                        if let Some(cancel) = registry.supervisor_cancel(&target_name) {
-                            cancel.cancel();
-                        }
-                        // Brief pause to allow child process to exit before re-spawning.
-                        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                        if let Some(new_token) = registry.reset_cancel_token(&target_name) {
-                            crate::supervisor::spawn(
-                                target_name.clone(),
-                                config,
-                                registry.clone(),
-                                logger.clone(),
-                                new_token,
-                            );
-                        }
-                        let resp = Response::ok(
-                            req_id,
-                            ResponseResult::Ack {
-                                message: format!("Process '{}' restarted", target_name),
-                            },
-                        );
-                        writer.lock().await.send(&resp).await?;
-                    } else {
-                        send_not_found(req_id, &name, writer).await?;
-                    }
-                } else {
-                    send_not_found(req_id, &name, writer).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -197,68 +173,71 @@ async fn dispatch_request(
         //   4. Wait for new instance to reach active state before replying.
         Method::ProcessReload => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                let target_name = registry.find_name_by_id_or_name(&name);
-                let config = target_name.as_deref().and_then(|n| registry.get_config(n));
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
+                    for target_name in &targets {
+                        if let Some(config) = registry.get_config(target_name) {
+                            let old_cancel = registry.supervisor_cancel(target_name);
 
-                match (target_name, config) {
-                    (Some(target_name), Some(config)) => {
-                        let old_cancel = registry.supervisor_cancel(&target_name);
+                            // 1. Gracefully stop the old supervisor.
+                            if let Some(cancel) = old_cancel {
+                                cancel.cancel();
+                            }
 
-                        // 1. Gracefully stop the old supervisor.
-                        if let Some(cancel) = old_cancel {
-                            cancel.cancel();
-                        }
+                            // 2. Wait up to 2 seconds for previous process to release ports and exit.
+                            let mut elapsed = 0u64;
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                elapsed += 100;
+                                let still_running = registry
+                                    .get(target_name)
+                                    .map(|p| p.state.is_active())
+                                    .unwrap_or(false);
+                                if !still_running || elapsed >= 2000 {
+                                    break;
+                                }
+                            }
 
-                        // 2. Wait up to 2 seconds for previous process to release ports and exit.
-                        let mut elapsed = 0u64;
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            elapsed += 100;
-                            let still_running = registry
-                                .get(&target_name)
-                                .map(|p| p.state.is_active())
-                                .unwrap_or(false);
-                            if !still_running || elapsed >= 2000 {
-                                break;
+                            // 3. Reset cancel token and spawn fresh supervisor.
+                            if let Some(new_token) = registry.reset_cancel_token(target_name) {
+                                crate::supervisor::spawn(
+                                    target_name.clone(),
+                                    config,
+                                    registry.clone(),
+                                    logger.clone(),
+                                    new_token,
+                                );
+                            }
+
+                            // 4. Wait for new process to become active.
+                            let mut elapsed = 0u64;
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                elapsed += 100;
+                                let is_running = registry
+                                    .get(target_name)
+                                    .map(|p| p.state.is_active())
+                                    .unwrap_or(false);
+                                if is_running || elapsed >= 2000 {
+                                    break;
+                                }
                             }
                         }
+                    }
 
-                        // 3. Reset cancel token and spawn fresh supervisor.
-                        if let Some(new_token) = registry.reset_cancel_token(&target_name) {
-                            crate::supervisor::spawn(
-                                target_name.clone(),
-                                config,
-                                registry.clone(),
-                                logger.clone(),
-                                new_token,
-                            );
-                        }
-
-                        // 4. Wait for new process to become active.
-                        let mut elapsed = 0u64;
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            elapsed += 100;
-                            let is_running = registry
-                                .get(&target_name)
-                                .map(|p| p.state.is_active())
-                                .unwrap_or(false);
-                            if is_running || elapsed >= 2000 {
-                                break;
-                            }
-                        }
-
-                        let resp = Response::ok(
-                            req_id,
-                            ResponseResult::Ack {
-                                message: format!("Process '{}' reloaded gracefully", target_name),
+                    let resp = Response::ok(
+                        req_id,
+                        ResponseResult::Ack {
+                            message: if targets.len() == 1 {
+                                format!("Process '{}' reloaded gracefully", targets[0])
+                            } else {
+                                format!("{} processes reloaded gracefully", targets.len())
                             },
-                        );
-                        writer.lock().await.send(&resp).await?;
-                    }
-                    _ => {
-                        send_not_found(req_id, &name, writer).await?;
-                    }
+                        },
+                    );
+                    writer.lock().await.send(&resp).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -267,37 +246,28 @@ async fn dispatch_request(
 
         Method::ProcessDelete => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                if name == "all" {
-                    for proc in registry.list() {
-                        if let Some(cancel) = registry.supervisor_cancel(&proc.name) {
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
+                    for target_name in &targets {
+                        if let Some(cancel) = registry.supervisor_cancel(target_name) {
                             cancel.cancel();
                         }
-                        registry.remove(&proc.name);
-                        // Remove from saved state too.
-                        let _ = storage.remove_saved_process(&proc.name);
+                        registry.remove(target_name);
+                        let _ = storage.remove_saved_process(target_name);
                     }
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: "All processes deleted".to_string(),
+                            message: if targets.len() == 1 {
+                                format!("Process '{}' deleted", targets[0])
+                            } else {
+                                format!("{} processes deleted", targets.len())
+                            },
                         },
                     );
                     writer.lock().await.send(&resp).await?;
-                } else if let Some(target_name) = registry.find_name_by_id_or_name(&name) {
-                    if let Some(cancel) = registry.supervisor_cancel(&target_name) {
-                        cancel.cancel();
-                    }
-                    registry.remove(&target_name);
-                    let _ = storage.remove_saved_process(&target_name);
-                    let resp = Response::ok(
-                        req_id,
-                        ResponseResult::Ack {
-                            message: format!("Process '{}' deleted", target_name),
-                        },
-                    );
-                    writer.lock().await.send(&resp).await?;
-                } else {
-                    send_not_found(req_id, &name, writer).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -390,31 +360,25 @@ async fn dispatch_request(
 
         Method::ProcessFlush => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                if name == "all" {
-                    // Flush logs for all known processes.
-                    let processes = registry.list();
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
                     let mut total: u64 = 0;
-                    for p in &processes {
-                        total += storage.flush_logs(&p.name).unwrap_or(0);
+                    for target_name in &targets {
+                        total += storage.flush_logs(target_name).unwrap_or(0);
                     }
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: format!("Flushed {} log lines across all processes", total),
+                            message: if targets.len() == 1 {
+                                format!("Flushed {} log lines for '{}'", total, targets[0])
+                            } else {
+                                format!("Flushed {} log lines across {} processes", total, targets.len())
+                            },
                         },
                     );
                     writer.lock().await.send(&resp).await?;
-                } else if let Some(target_name) = registry.find_name_by_id_or_name(&name) {
-                    let deleted = storage.flush_logs(&target_name).unwrap_or(0);
-                    let resp = Response::ok(
-                        req_id,
-                        ResponseResult::Ack {
-                            message: format!("Flushed {} log lines for '{}'", deleted, target_name),
-                        },
-                    );
-                    writer.lock().await.send(&resp).await?;
-                } else {
-                    send_not_found(req_id, &name, writer).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -423,28 +387,136 @@ async fn dispatch_request(
 
         Method::ProcessReset => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                if name == "all" {
-                    for proc in registry.list() {
-                        registry.reset_restart_count(&proc.name);
+                let targets = registry.resolve_targets(&name);
+                if targets.is_empty() {
+                    send_not_found(req_id, &name, writer).await?;
+                } else {
+                    for target_name in &targets {
+                        registry.reset_restart_count(target_name);
                     }
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: "Restart counters reset for all processes".to_string(),
+                            message: if targets.len() == 1 {
+                                format!("Restart counter reset for '{}'", targets[0])
+                            } else {
+                                format!("Restart counters reset for {} processes", targets.len())
+                            },
                         },
                     );
                     writer.lock().await.send(&resp).await?;
-                } else if let Some(target_name) = registry.find_name_by_id_or_name(&name) {
-                    registry.reset_restart_count(&target_name);
+                }
+            } else {
+                send_invalid_params(req_id, writer).await?;
+            }
+        }
+
+        Method::ProcessSendSignal => {
+            if let Ok(SendSignalParams { target, signal }) = request.parse_params() {
+                let targets = registry.resolve_targets(&target);
+                if targets.is_empty() {
+                    send_not_found(req_id, &target, writer).await?;
+                } else {
+                    let mut delivered = 0usize;
+                    for name in targets {
+                        if let Some(pid) = registry.get_pid(&name) {
+                            if send_system_signal(pid, &signal) {
+                                delivered += 1;
+                                info!(name = %name, pid = pid, signal = %signal, "Delivered signal to process");
+                            }
+                        }
+                    }
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: format!("Restart counter reset for '{}'", target_name),
+                            message: format!("Delivered signal {} to {} process(es)", signal, delivered),
                         },
                     );
                     writer.lock().await.send(&resp).await?;
+                }
+            } else {
+                send_invalid_params(req_id, writer).await?;
+            }
+        }
+
+        Method::ProcessScale => {
+            if let Ok(ScaleParams { target, count }) = request.parse_params() {
+                let matches = registry.resolve_targets(&target);
+                if matches.is_empty() {
+                    send_not_found(req_id, &target, writer).await?;
                 } else {
-                    send_not_found(req_id, &name, writer).await?;
+                    let current_count = matches.len() as u32;
+                    let target_count = if let Some(delta) = count.strip_prefix('+') {
+                        let add: u32 = delta.parse().unwrap_or(1);
+                        current_count + add
+                    } else if let Some(delta) = count.strip_prefix('-') {
+                        let sub: u32 = delta.parse().unwrap_or(1);
+                        current_count.saturating_sub(sub).max(1)
+                    } else {
+                        count.parse::<u32>().unwrap_or(current_count).max(1)
+                    };
+
+                    let base_config = registry.get_config(&matches[0]);
+                    if let Some(mut config) = base_config {
+                        config.instances = target_count;
+
+                        if target_count > current_count {
+                            // Scale up: spawn additional instances
+                            for i in current_count..target_count {
+                                let instance_name = format!("{}-{}", target, i);
+                                let cancel_token = if registry.contains(&instance_name) {
+                                    if let Some(cancel) = registry.supervisor_cancel(&instance_name) {
+                                        cancel.cancel();
+                                    }
+                                    registry.reset_cancel_token(&instance_name).unwrap_or_default()
+                                } else {
+                                    let _ = registry.register(instance_name.clone(), config.clone());
+                                    registry.supervisor_cancel(&instance_name).unwrap_or_default()
+                                };
+                                crate::supervisor::spawn(
+                                    instance_name,
+                                    config.clone(),
+                                    registry.clone(),
+                                    logger.clone(),
+                                    cancel_token,
+                                );
+                            }
+                            let resp = Response::ok(
+                                req_id,
+                                ResponseResult::Ack {
+                                    message: format!("Scaled '{}' from {} to {} instances", target, current_count, target_count),
+                                },
+                            );
+                            writer.lock().await.send(&resp).await?;
+                        } else if target_count < current_count {
+                            // Scale down: stop and remove excess instances from highest index
+                            let to_remove = (current_count - target_count) as usize;
+                            for proc_name in matches.iter().rev().take(to_remove) {
+                                if let Some(cancel) = registry.supervisor_cancel(proc_name) {
+                                    cancel.cancel();
+                                }
+                                registry.remove(proc_name);
+                                let _ = storage.remove_saved_process(proc_name);
+                            }
+                            let resp = Response::ok(
+                                req_id,
+                                ResponseResult::Ack {
+                                    message: format!("Scaled '{}' from {} down to {} instances", target, current_count, target_count),
+                                },
+                            );
+                            writer.lock().await.send(&resp).await?;
+                        } else {
+                            let resp = Response::ok(
+                                req_id,
+                                ResponseResult::Ack {
+                                    message: format!("'{}' is already at {} instances", target, target_count),
+                                },
+                            );
+                            writer.lock().await.send(&resp).await?;
+                        }
+                    } else {
+                        send_not_found(req_id, &target, writer).await?;
+                    }
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -545,3 +617,44 @@ async fn send_invalid_params(req_id: u64, writer: Arc<Mutex<ResponseWriter>>) ->
     let resp = Response::err(req_id, -32602, "Invalid method parameters");
     writer.lock().await.send(&resp).await
 }
+
+fn send_system_signal(pid: u32, signal: &str) -> bool {
+    let clean_sig = signal.trim().to_uppercase();
+    let sig_name = clean_sig.strip_prefix("SIG").unwrap_or(&clean_sig);
+
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("kill")
+            .arg(format!("-{}", sig_name))
+            .arg(pid.to_string())
+            .status();
+        match status {
+            Ok(s) => s.success(),
+            Err(e) => {
+                tracing::error!(pid = pid, error = %e, "Failed to execute kill command");
+                false
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        match sig_name {
+            "KILL" | "9" => std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false),
+            "TERM" | "15" | "INT" | "2" => std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false),
+            _ => {
+                tracing::warn!(pid = pid, signal = %signal, "POSIX signal not supported natively on Windows");
+                false
+            }
+        }
+    }
+}
+

@@ -115,6 +115,7 @@ pub fn parse_procfile_str(
             max_memory_mb: 0,
             max_cpu_pct: 0.0,
             alerts: Default::default(),
+            health: None,
         };
 
         apps.push((name.to_string(), app_config));

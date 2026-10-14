@@ -100,6 +100,10 @@ pub enum Method {
     ProcessFlush,
     /// Reset the restart counter for a process (orion reset).
     ProcessReset,
+    /// Send an arbitrary POSIX signal to a process (orion sendSignal).
+    ProcessSendSignal,
+    /// Scale cluster instances up or down (orion scale).
+    ProcessScale,
     DaemonStatus,
     DaemonSave,
     DaemonRestore,
@@ -121,6 +125,8 @@ pub enum Params {
     ProcessLogs(LogsParams),
     ProcessFlush(NameParams),
     ProcessReset(NameParams),
+    ProcessSendSignal(SendSignalParams),
+    ProcessScale(ScaleParams),
     DaemonStatus(EmptyParams),
     DaemonSave(EmptyParams),
     DaemonRestore(EmptyParams),
@@ -157,6 +163,22 @@ pub struct LogsParams {
 
 fn default_log_lines() -> usize {
     50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendSignalParams {
+    /// Process name, numeric ID, or "all".
+    pub target: String,
+    /// POSIX signal name (e.g. "SIGUSR1", "SIGHUP", "SIGTERM", "SIGINT") or numeric code.
+    pub signal: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaleParams {
+    /// Process or application name to scale.
+    pub target: String,
+    /// Target count (e.g. "4") or delta (e.g. "+2", "-1").
+    pub count: String,
 }
 
 /// All possible result payloads from the daemon.
@@ -205,4 +227,44 @@ pub struct LogLine {
 pub enum LogStream {
     Stdout,
     Stderr,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_send_signal_params_serialization() {
+        let params = SendSignalParams {
+            target: "web-0".to_string(),
+            signal: "SIGUSR1".to_string(),
+        };
+        let json = serde_json::to_string(&params).expect("serialization failed");
+        let parsed: SendSignalParams = serde_json::from_str(&json).expect("deserialization failed");
+        assert_eq!(parsed.target, "web-0");
+        assert_eq!(parsed.signal, "SIGUSR1");
+    }
+
+    #[test]
+    fn test_scale_params_serialization() {
+        let params = ScaleParams {
+            target: "api".to_string(),
+            count: "+2".to_string(),
+        };
+        let json = serde_json::to_string(&params).expect("serialization failed");
+        let parsed: ScaleParams = serde_json::from_str(&json).expect("deserialization failed");
+        assert_eq!(parsed.target, "api");
+        assert_eq!(parsed.count, "+2");
+    }
+
+    #[test]
+    fn test_method_serialization() {
+        let method = Method::ProcessSendSignal;
+        let json = serde_json::to_string(&method).expect("serialization failed");
+        assert_eq!(json, "\"process_send_signal\"");
+
+        let method = Method::ProcessScale;
+        let json = serde_json::to_string(&method).expect("serialization failed");
+        assert_eq!(json, "\"process_scale\"");
+    }
 }

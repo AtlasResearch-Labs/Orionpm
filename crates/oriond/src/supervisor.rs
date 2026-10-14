@@ -1,5 +1,5 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use orion_core::config::{AppConfig, RestartPolicy};
+use orion_core::config::{AppConfig, HealthConfig, RestartPolicy};
 use orion_core::process_state::ProcessState;
 use orion_core::protocol::{LogLine, LogStream};
 use std::path::{Path, PathBuf};
@@ -38,6 +38,7 @@ async fn run_supervisor_loop(
 ) {
     info!(name = %name, "Supervisor task started");
     let mut restart_count = 0;
+    let mut restart_timestamps: Vec<u64> = Vec::new();
 
     // Initialize file watcher channel if watch mode is enabled
     let mut watch_rx = if config.watch {
@@ -231,8 +232,21 @@ async fn run_supervisor_loop(
             });
         }
 
-        // Wait for process exit OR cancellation OR file change (when watch is enabled)
+        // Initialize health probe if configured
+        let probe_cancel = CancellationToken::new();
+        let (unhealthy_tx, mut unhealthy_rx) = tokio::sync::mpsc::channel(1);
+        if let Some(ref health) = config.health {
+            let h = health.clone();
+            let tx = unhealthy_tx.clone();
+            let cancel = probe_cancel.clone();
+            tokio::spawn(async move {
+                run_health_probe(h, tx, cancel).await;
+            });
+        }
+
+        // Wait for process exit OR cancellation OR file change (when watch is enabled) OR health failure
         let mut file_change_triggered = false;
+        let mut health_failure_triggered = false;
         let exit_status = tokio::select! {
             res = child.wait() => {
                 match res {
@@ -244,6 +258,7 @@ async fn run_supervisor_loop(
                 }
             }
             _ = cancel_token.cancelled() => {
+                probe_cancel.cancel();
                 info!(name = %name, pid = pid, "Received stop signal, terminating process");
                 registry.set_state(&name, ProcessState::Stopping);
 
@@ -259,6 +274,7 @@ async fn run_supervisor_loop(
                     None => std::future::pending().await,
                 }
             } => {
+                probe_cancel.cancel();
                 info!(name = %name, path = %changed_path.display(), "File change detected; restarting child");
                 logger.log(
                     &name,
@@ -273,19 +289,40 @@ async fn run_supervisor_loop(
                 file_change_triggered = true;
                 None
             }
+            _ = unhealthy_rx.recv() => {
+                probe_cancel.cancel();
+                let failures = config.health.as_ref().map(|h| h.max_failures).unwrap_or(3);
+                let err_msg = format!("[orion] Health check failed for '{}' ({} consecutive probe failures). Triggering automated recovery restart...", name, failures);
+                warn!(name = %name, "{}", err_msg);
+                logger.log(
+                    &name,
+                    LogLine {
+                        timestamp: unix_now(),
+                        stream: LogStream::Stderr,
+                        text: err_msg,
+                    },
+                );
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                health_failure_triggered = true;
+                None
+            }
         };
+
+        probe_cancel.cancel();
 
         if file_change_triggered {
             restart_count = 0;
+            restart_timestamps.clear();
             continue;
         }
 
         let exit_code = exit_status.and_then(|s| s.code());
-        let success = exit_status.map(|s| s.success()).unwrap_or(false);
+        let success = !health_failure_triggered && exit_status.map(|s| s.success()).unwrap_or(false);
 
         info!(name = %name, exit_code = ?exit_code, success = success, "Process exited");
 
-        // Fire alert webhook if configured and process crashed
+        // Fire alert webhook if configured and process crashed or failed health check
         if !success {
             if let Some(ref webhook_url) = config.alerts.on_crash_webhook {
                 let url = webhook_url.clone();
@@ -298,10 +335,14 @@ async fn run_supervisor_loop(
         }
 
         // Evaluate restart policy
-        let should_restart = match config.restart_policy {
-            RestartPolicy::Never => false,
-            RestartPolicy::OnFailure => !success,
-            RestartPolicy::Always => true,
+        let should_restart = if health_failure_triggered {
+            true
+        } else {
+            match config.restart_policy {
+                RestartPolicy::Never => false,
+                RestartPolicy::OnFailure => !success,
+                RestartPolicy::Always => true,
+            }
         };
 
         if !should_restart {
@@ -337,6 +378,7 @@ async fn run_supervisor_loop(
                             },
                         );
                         restart_count = 0;
+                        restart_timestamps.clear();
                         continue;
                     }
                 }
@@ -345,11 +387,25 @@ async fn run_supervisor_loop(
             }
         }
 
-        restart_count += 1;
+        // Sliding restart window enforcement
+        let now = unix_now();
+        if config.restart_window_secs > 0 {
+            let window_start = now.saturating_sub(config.restart_window_secs);
+            restart_timestamps.retain(|&t| t >= window_start);
+        }
+        restart_timestamps.push(now);
+        restart_count = restart_timestamps.len() as u32;
         registry.increment_restarts(&name);
 
         if config.max_restarts > 0 && restart_count >= config.max_restarts {
-            let msg = format!("Exceeded max restarts limit ({})", config.max_restarts);
+            let msg = if config.restart_window_secs > 0 {
+                format!(
+                    "Exceeded max restarts limit ({}) within {}s window",
+                    config.max_restarts, config.restart_window_secs
+                )
+            } else {
+                format!("Exceeded max restarts limit ({})", config.max_restarts)
+            };
             warn!(name = %name, message = %msg);
             registry.set_state(
                 &name,
@@ -379,6 +435,7 @@ async fn run_supervisor_loop(
                             },
                         );
                         restart_count = 0;
+                        restart_timestamps.clear();
                         continue;
                     }
                 }
@@ -387,15 +444,19 @@ async fn run_supervisor_loop(
             }
         }
 
+        // Exponential backoff with a cap of 30 seconds
+        let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
+        let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+
         warn!(
             name = %name,
             restart_count = restart_count,
-            delay_ms = config.restart_delay_ms,
-            "Restarting process after delay"
+            delay_ms = effective_delay_ms,
+            "Restarting process after backoff delay"
         );
 
         tokio::select! {
-            _ = sleep(Duration::from_millis(config.restart_delay_ms)) => {},
+            _ = sleep(Duration::from_millis(effective_delay_ms)) => {},
             _ = cancel_token.cancelled() => {
                 registry.set_state(&name, ProcessState::Stopped);
                 break;
@@ -415,6 +476,7 @@ async fn run_supervisor_loop(
                     },
                 );
                 restart_count = 0;
+                restart_timestamps.clear();
                 continue;
             }
         }
@@ -556,3 +618,61 @@ fn unix_now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+/// Runs periodic HTTP or TCP readiness and liveness probes against a supervised process.
+/// If max_failures consecutive checks fail, it notifies the supervisor via unhealthy_tx.
+async fn run_health_probe(
+    health: HealthConfig,
+    unhealthy_tx: tokio::sync::mpsc::Sender<()>,
+    cancel_token: CancellationToken,
+) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(health.timeout_secs.max(1)))
+        .build()
+        .unwrap_or_default();
+
+    let mut consecutive_failures = 0;
+    let interval = Duration::from_secs(health.interval_secs.max(1));
+
+    // Initial 2-second grace period to allow the application to bind its sockets
+    tokio::select! {
+        _ = cancel_token.cancelled() => return,
+        _ = sleep(Duration::from_secs(2)) => {}
+    }
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            _ = sleep(interval) => {}
+        }
+
+        let is_healthy = if let Some(ref http_url) = health.http {
+            match client.get(http_url).send().await {
+                Ok(resp) => resp.status().is_success() || resp.status().is_redirection(),
+                Err(_) => false,
+            }
+        } else if let Some(ref tcp_addr) = health.tcp {
+            matches!(
+                tokio::time::timeout(
+                    Duration::from_secs(health.timeout_secs.max(1)),
+                    tokio::net::TcpStream::connect(tcp_addr),
+                )
+                .await,
+                Ok(Ok(_))
+            )
+        } else {
+            true
+        };
+
+        if is_healthy {
+            consecutive_failures = 0;
+        } else {
+            consecutive_failures += 1;
+            if consecutive_failures >= health.max_failures {
+                let _ = unhealthy_tx.send(()).await;
+                return;
+            }
+        }
+    }
+}
+
