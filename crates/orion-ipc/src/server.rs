@@ -46,7 +46,12 @@ where
         let socket_path = std::env::temp_dir().join(crate::SOCKET_NAME);
         if socket_path.exists() {
             // Check if another live daemon is currently answering on this socket.
-            if crate::client::connect().await.is_err() {
+            let is_alive = if let Ok(socket_name) = get_socket_name() {
+                Stream::connect(socket_name).await.is_ok()
+            } else {
+                false
+            };
+            if !is_alive {
                 debug!("Removing stale IPC socket: {:?}", socket_path);
                 let _ = std::fs::remove_file(&socket_path);
             }
