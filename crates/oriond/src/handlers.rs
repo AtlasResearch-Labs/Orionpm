@@ -256,6 +256,7 @@ async fn dispatch_request(
                         }
                         registry.remove(target_name);
                         let _ = storage.remove_saved_process(target_name);
+                        let _ = storage.flush_logs(target_name);
                     }
                     let resp = Response::ok(
                         req_id,
@@ -314,9 +315,23 @@ async fn dispatch_request(
                         .unwrap_or_else(|| name.clone())
                 };
 
-                let historical_entries = storage
-                    .get_logs_with_process(&target_name, lines)
-                    .unwrap_or_default();
+                let historical_entries = if target_name == "all" {
+                    let active_names: Vec<String> =
+                        registry.list().into_iter().map(|p| p.name).collect();
+                    if active_names.is_empty() {
+                        storage
+                            .get_logs_with_process("all", lines)
+                            .unwrap_or_default()
+                    } else {
+                        storage
+                            .get_logs_for_processes(&active_names, lines)
+                            .unwrap_or_default()
+                    }
+                } else {
+                    storage
+                        .get_logs_with_process(&target_name, lines)
+                        .unwrap_or_default()
+                };
 
                 for (proc_name, line) in historical_entries {
                     let resp = Response::ok(
@@ -359,25 +374,36 @@ async fn dispatch_request(
 
         Method::ProcessFlush => {
             if let Ok(NameParams { name }) = request.parse_params() {
-                let targets = registry.resolve_targets(&name);
-                if targets.is_empty() {
-                    send_not_found(req_id, &name, writer).await?;
-                } else {
-                    let mut total: u64 = 0;
-                    for target_name in &targets {
-                        total += storage.flush_logs(target_name).unwrap_or(0);
-                    }
+                if name == "all" || name.is_empty() {
+                    let total = storage.flush_all_logs().unwrap_or(0);
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: if targets.len() == 1 {
-                                format!("Flushed {} log lines for '{}'", total, targets[0])
-                            } else {
-                                format!("Flushed {} log lines across {} processes", total, targets.len())
-                            },
+                            message: format!("Flushed {} log lines across all processes", total),
                         },
                     );
                     writer.lock().await.send(&resp).await?;
+                } else {
+                    let targets = registry.resolve_targets(&name);
+                    if targets.is_empty() {
+                        send_not_found(req_id, &name, writer).await?;
+                    } else {
+                        let mut total: u64 = 0;
+                        for target_name in &targets {
+                            total += storage.flush_logs(target_name).unwrap_or(0);
+                        }
+                        let resp = Response::ok(
+                            req_id,
+                            ResponseResult::Ack {
+                                message: if targets.len() == 1 {
+                                    format!("Flushed {} log lines for '{}'", total, targets[0])
+                                } else {
+                                    format!("Flushed {} log lines across {} processes", total, targets.len())
+                                },
+                            },
+                        );
+                        writer.lock().await.send(&resp).await?;
+                    }
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
