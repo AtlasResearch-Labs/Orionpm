@@ -7,6 +7,7 @@ use super::client;
 #[derive(Args)]
 pub struct FlushArgs {
     /// Name, numeric ID of the process, or "all" to flush logs of all processes.
+    #[arg(default_value = "all")]
     pub target: String,
 }
 

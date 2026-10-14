@@ -40,7 +40,7 @@ pub async fn run(args: LogsArgs) -> Result<()> {
         } else {
             ""
         };
-        eprintln!(
+        println!(
             "\x1b[1;36m[TAILING]\x1b[0m Tailing last {} lines for [{}] (change with --lines <N>{})",
             args.lines, args.target, stream_hint
         );

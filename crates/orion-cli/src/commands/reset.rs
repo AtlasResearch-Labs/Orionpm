@@ -7,6 +7,7 @@ use super::client;
 #[derive(Args)]
 pub struct ResetArgs {
     /// Name, numeric ID of the process, or "all" to reset all restart counters.
+    #[arg(default_value = "all")]
     pub target: String,
 }
 
