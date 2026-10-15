@@ -197,7 +197,7 @@ orion start Procfile.dev --watch
 ---
 
 ### `orion stop`
-Stops a running process by sending SIGTERM followed by SIGKILL if it does not exit within the timeout window (default: 5000ms).
+Stops a running process gracefully by delivering SIGTERM and awaiting termination before returning, escalating to SIGKILL if it does not exit within the timeout window (default: 5000ms). This prevents race conditions in automation and deployment scripts (`orion stop <app> && deploy`).
 
 ```bash
 orion stop <TARGET>

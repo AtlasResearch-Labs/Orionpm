@@ -40,6 +40,10 @@ async fn run_supervisor_loop(
     let mut restart_count = 0;
     let mut restart_timestamps: Vec<u64> = Vec::new();
 
+    // Initialize command channel for daemon/metrics signals (e.g. memory threshold restart)
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<crate::registry::SupervisorCommand>(8);
+    registry.set_supervisor_cmd(&name, cmd_tx);
+
     // Initialize file watcher channel if watch mode is enabled
     let mut watch_rx = if config.watch {
         let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -268,19 +272,14 @@ async fn run_supervisor_loop(
             });
         }
 
-        // Wait for process exit OR cancellation OR file change (when watch is enabled) OR health failure
+        // Wait for process exit OR cancellation OR file change (when watch is enabled) OR health failure OR daemon commands
         let mut file_change_triggered = false;
         let mut health_failure_triggered = false;
+        let mut memory_limit_triggered = false;
+
         let exit_status = tokio::select! {
-            res = child.wait() => {
-                match res {
-                    Ok(status) => Some(status),
-                    Err(e) => {
-                        error!(name = %name, error = %e, "Error waiting for child process");
-                        None
-                    }
-                }
-            }
+            biased;
+
             _ = cancel_token.cancelled() => {
                 probe_cancel.cancel();
                 info!(name = %name, pid = pid, "Received stop signal, terminating process");
@@ -295,6 +294,45 @@ async fn run_supervisor_loop(
                 }
                 info!(name = %name, "Process stopped gracefully");
                 break;
+            }
+            Some(cmd) = cmd_rx.recv() => {
+                probe_cancel.cancel();
+                match cmd {
+                    crate::registry::SupervisorCommand::MemoryRestart { mem_mb, limit_mb } => {
+                        warn!(
+                            name = %name,
+                            pid = pid,
+                            mem_mb = mem_mb,
+                            limit_mb = limit_mb,
+                            "Process exceeded memory threshold; initiating supervisor-managed restart"
+                        );
+                        logger.log(
+                            &name,
+                            LogLine {
+                                timestamp: unix_now(),
+                                stream: LogStream::Stderr,
+                                text: format!(
+                                    "[orion] Memory threshold exceeded ({} MB > {} MB). Automatic restart triggered.",
+                                    mem_mb, limit_mb
+                                ),
+                            },
+                        );
+
+                        if let Some(ref webhook_url) = config.alerts.on_high_memory_webhook {
+                            let url = webhook_url.clone();
+                            let app_name = name.clone();
+                            let current_mem = mem_mb * 1024 * 1024;
+                            let limit = limit_mb;
+                            tokio::spawn(async move {
+                                crate::metrics::send_high_memory_webhook(&url, &app_name, current_mem, limit).await;
+                            });
+                        }
+
+                        graceful_terminate_child(&mut child, pid, 4).await;
+                        memory_limit_triggered = true;
+                        None
+                    }
+                }
             }
             Some(changed_path) = async {
                 match watch_rx.as_mut() {
@@ -333,6 +371,15 @@ async fn run_supervisor_loop(
                 health_failure_triggered = true;
                 None
             }
+            res = child.wait() => {
+                match res {
+                    Ok(status) => Some(status),
+                    Err(e) => {
+                        error!(name = %name, error = %e, "Error waiting for child process");
+                        None
+                    }
+                }
+            }
         };
 
         probe_cancel.cancel();
@@ -341,6 +388,56 @@ async fn run_supervisor_loop(
             restart_count = 0;
             restart_timestamps.clear();
             continue;
+        }
+
+        if memory_limit_triggered {
+            let now = unix_now();
+            if config.restart_window_secs > 0 {
+                let window_start = now.saturating_sub(config.restart_window_secs);
+                restart_timestamps.retain(|&t| t >= window_start);
+            }
+            restart_timestamps.push(now);
+            restart_count = restart_timestamps.len() as u32;
+            registry.increment_restarts(&name);
+
+            if config.max_restarts > 0 && restart_count >= config.max_restarts {
+                let msg = format!(
+                    "Exceeded max restarts limit ({}) from memory limit",
+                    config.max_restarts
+                );
+                warn!(name = %name, message = %msg);
+                registry.set_state(
+                    &name,
+                    ProcessState::Errored {
+                        exit_code: None,
+                        message: msg,
+                    },
+                );
+                break;
+            }
+
+            // Exponential backoff
+            let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
+            let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+
+            warn!(
+                name = %name,
+                restart_count = restart_count,
+                delay_ms = effective_delay_ms,
+                "Restarting process after memory threshold backoff delay"
+            );
+
+            registry.set_state(&name, ProcessState::Restarting);
+
+            tokio::select! {
+                _ = sleep(Duration::from_millis(effective_delay_ms)) => {
+                    continue;
+                }
+                _ = cancel_token.cancelled() => {
+                    registry.set_state(&name, ProcessState::Stopped);
+                    break;
+                }
+            }
         }
 
         let exit_code = exit_status.and_then(|s| s.code());
@@ -749,15 +846,20 @@ async fn send_crash_email(
         }
     };
 
+    let exit_code_str = match exit_code {
+        Some(code) => code.to_string(),
+        None => "none (terminated by signal)".to_string(),
+    };
+
     let email = match Message::builder()
         .from(from_addr)
         .to(to_addr)
         .subject(format!("[Orion Alert] Process '{}' Crashed", app_name))
         .header(ContentType::TEXT_PLAIN)
         .body(format!(
-            "Process '{}' managed by Orion crashed.\nExit code: {:?}\nTimestamp: {}\n",
+            "Process '{}' managed by Orion crashed.\nExit code: {}\nTimestamp: {}\n",
             app_name,
-            exit_code,
+            exit_code_str,
             unix_now()
         )) {
         Ok(m) => m,

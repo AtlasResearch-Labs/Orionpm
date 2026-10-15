@@ -35,7 +35,7 @@ enum Command {
     #[command(alias = "res")]
     Restart(commands::restart::RestartArgs),
 
-    /// Zero-downtime reload (start new instance then gracefully stop old).
+    /// Gracefully reload a process (graceful stop-then-start for single instances, rolling reload for clusters).
     #[command(alias = "gracefulReload")]
     Reload(commands::reload::ReloadArgs),
 

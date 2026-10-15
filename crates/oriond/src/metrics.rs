@@ -1,5 +1,4 @@
 use orion_core::process_state::ProcessState;
-use orion_core::protocol::{LogLine, LogStream};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::time::sleep;
@@ -12,7 +11,7 @@ use crate::registry::ProcessRegistry;
 /// Background task that collects CPU and RSS memory metrics for all
 /// running supervised processes using real OS data from sysinfo.
 /// Also enforces max_memory_mb thresholds and triggers auto-restarts and alerts.
-pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: CancellationToken) {
+pub async fn run(registry: ProcessRegistry, _logger: LogBus, shutdown: CancellationToken) {
     info!("Metrics collector started");
     let mut system = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -56,60 +55,19 @@ pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: Cancellati
                         let limit_bytes = config.max_memory_mb * 1024 * 1024;
                         if mem > limit_bytes {
                             let mem_mb = mem / (1024 * 1024);
-                            warn!(
-                                name = %name,
-                                mem_mb = mem_mb,
-                                limit_mb = config.max_memory_mb,
-                                "Process exceeded memory threshold; initiating automatic restart"
-                            );
-
-                            logger.log(
+                            let triggered = registry.trigger_memory_restart(
                                 &name,
-                                LogLine {
-                                    timestamp: unix_now(),
-                                    stream: LogStream::Stderr,
-                                    text: format!(
-                                        "[orion] Memory threshold exceeded ({} MB > {} MB). Automatic restart triggered.",
-                                        mem_mb, config.max_memory_mb
-                                    ),
-                                },
+                                mem_mb,
+                                config.max_memory_mb,
                             );
-
-                            // Send high memory webhook if configured
-                            if let Some(ref webhook_url) = config.alerts.on_high_memory_webhook {
-                                let url = webhook_url.clone();
-                                let app_name = name.clone();
-                                let current_mem = mem;
-                                let limit = config.max_memory_mb;
-                                tokio::spawn(async move {
-                                    send_high_memory_webhook(&url, &app_name, current_mem, limit)
-                                        .await;
-                                });
+                            if triggered {
+                                warn!(
+                                    name = %name,
+                                    mem_mb = mem_mb,
+                                    limit_mb = config.max_memory_mb,
+                                    "Process exceeded memory threshold; triggered supervisor restart"
+                                );
                             }
-
-                            // Trigger process restart safely avoiding state race condition
-                            let reg = registry.clone();
-                            let log = logger.clone();
-                            let cfg = config.clone();
-                            let n = name.clone();
-                            tokio::spawn(async move {
-                                reg.set_state(&n, ProcessState::Restarting);
-                                reg.increment_restarts(&n);
-                                if let Some(cancel) = reg.supervisor_cancel(&n) {
-                                    cancel.cancel();
-                                }
-                                // Give old supervisor time to terminate child and cleanly exit
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                if let Some(new_token) = reg.reset_cancel_token(&n) {
-                                    crate::supervisor::spawn(
-                                        n,
-                                        cfg,
-                                        reg,
-                                        log,
-                                        new_token,
-                                    );
-                                }
-                            });
                         }
                     }
 
@@ -132,7 +90,7 @@ pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: Cancellati
     }
 }
 
-async fn send_high_memory_webhook(url: &str, app_name: &str, memory_bytes: u64, limit_mb: u64) {
+pub async fn send_high_memory_webhook(url: &str, app_name: &str, memory_bytes: u64, limit_mb: u64) {
     let client = reqwest::Client::new();
     let payload = serde_json::json!({
         "event": "high_memory_limit_exceeded",

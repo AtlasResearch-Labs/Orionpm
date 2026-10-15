@@ -108,13 +108,27 @@ async fn dispatch_request(
                             cancel.cancel();
                         }
                     }
+
+                    // Wait for all targets to gracefully terminate and release resources (up to 5s).
+                    // This matches PM2 behavior and prevents race conditions in deploy scripts (`stop && deploy`).
+                    let start_wait = tokio::time::Instant::now();
+                    while start_wait.elapsed() < tokio::time::Duration::from_secs(5) {
+                        let any_active = targets.iter().any(|t| {
+                            registry.get(t).map(|p| p.state.is_active()).unwrap_or(false)
+                        });
+                        if !any_active {
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    }
+
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
                             message: if targets.len() == 1 {
-                                format!("Process '{}' stopping", targets[0])
+                                format!("Process '{}' stopped", targets[0])
                             } else {
-                                format!("{} processes stopping", targets.len())
+                                format!("{} processes stopped", targets.len())
                             },
                         },
                     );
@@ -484,10 +498,7 @@ async fn dispatch_request(
 
         Method::ProcessScale => {
             if let Ok(ScaleParams { target, count }) = request.parse_params() {
-                let matches = registry.resolve_targets(&target);
-                if matches.is_empty() {
-                    send_not_found(req_id, &target, writer).await?;
-                } else {
+                if let Some((base_name, matches)) = registry.resolve_scale_cluster(&target) {
                     let current_count = matches.len() as u32;
                     let target_count = if let Some(delta) = count.strip_prefix('+') {
                         let add: u32 = delta.parse().unwrap_or(1);
@@ -504,47 +515,56 @@ async fn dispatch_request(
                         config.instances = target_count;
 
                         if target_count > current_count {
-                            // Scale up: spawn additional instances
-                            for i in current_count..target_count {
-                                let instance_name = format!("{}-{}", target, i);
-                                let cancel_token = if registry.contains(&instance_name) {
-                                    if let Some(cancel) = registry.supervisor_cancel(&instance_name) {
-                                        cancel.cancel();
-                                    }
-                                    registry.reset_cancel_token(&instance_name).unwrap_or_default()
-                                } else {
+                            // Scale up: spawn additional instances with unique unused indices
+                            let needed = (target_count - current_count) as usize;
+                            let mut spawned = 0;
+                            let mut idx = 1u32;
+                            while spawned < needed {
+                                let instance_name = format!("{}-{}", base_name, idx);
+                                if !registry.contains(&instance_name) {
                                     let _ = registry.register(instance_name.clone(), config.clone());
-                                    registry.supervisor_cancel(&instance_name).unwrap_or_default()
-                                };
-                                crate::supervisor::spawn(
-                                    instance_name,
-                                    config.clone(),
-                                    registry.clone(),
-                                    logger.clone(),
-                                    cancel_token,
-                                );
+                                    let cancel_token = registry.supervisor_cancel(&instance_name).unwrap_or_default();
+                                    crate::supervisor::spawn(
+                                        instance_name,
+                                        config.clone(),
+                                        registry.clone(),
+                                        logger.clone(),
+                                        cancel_token,
+                                    );
+                                    spawned += 1;
+                                }
+                                idx += 1;
                             }
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("Scaled '{}' from {} to {} instances", target, current_count, target_count),
+                                    message: format!("Scaled '{}' from {} to {} instances", base_name, current_count, target_count),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
                         } else if target_count < current_count {
-                            // Scale down: stop and remove excess instances from highest index
+                            // Scale down: gracefully stop and remove excess instances from highest index down
                             let to_remove = (current_count - target_count) as usize;
                             for proc_name in matches.iter().rev().take(to_remove) {
                                 if let Some(cancel) = registry.supervisor_cancel(proc_name) {
                                     cancel.cancel();
                                 }
+                                // Give process time to terminate cleanly before removing from registry
+                                let mut elapsed = 0u64;
+                                while elapsed < 2000 {
+                                    let is_active = registry.get(proc_name).map(|p| p.state.is_active()).unwrap_or(false);
+                                    if !is_active { break; }
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                    elapsed += 50;
+                                }
                                 registry.remove(proc_name);
                                 let _ = storage.remove_saved_process(proc_name);
+                                let _ = storage.flush_logs(proc_name);
                             }
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("Scaled '{}' from {} down to {} instances", target, current_count, target_count),
+                                    message: format!("Scaled '{}' from {} down to {} instances", base_name, current_count, target_count),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -552,7 +572,7 @@ async fn dispatch_request(
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("'{}' is already at {} instances", target, target_count),
+                                    message: format!("'{}' is already at {} instances", base_name, target_count),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -560,6 +580,8 @@ async fn dispatch_request(
                     } else {
                         send_not_found(req_id, &target, writer).await?;
                     }
+                } else {
+                    send_not_found(req_id, &target, writer).await?;
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
