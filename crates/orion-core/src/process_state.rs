@@ -107,8 +107,12 @@ pub struct ProcessInfo {
 
 impl ProcessInfo {
     /// Returns memory formatted as a human-readable string (e.g. "128.4 MB").
+    /// Returns "0 B" when process is not alive.
     /// Returns "-" when memory data is unavailable.
     pub fn memory_display(&self) -> String {
+        if !self.state.is_alive() {
+            return "0 B".to_string();
+        }
         match self.memory_bytes {
             Some(bytes) if bytes > 0 => {
                 let mb = bytes as f64 / 1_048_576.0;
@@ -119,8 +123,12 @@ impl ProcessInfo {
     }
 
     /// Returns CPU formatted as a string (e.g. "1.2%").
+    /// Returns "0.0%" when process is not alive.
     /// Returns "-" when CPU data is unavailable.
     pub fn cpu_display(&self) -> String {
+        if !self.state.is_alive() {
+            return "0.0%".to_string();
+        }
         match self.cpu_pct {
             Some(pct) => format!("{:.1}%", pct),
             None => "-".to_string(),

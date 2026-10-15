@@ -121,6 +121,9 @@ impl ProcessRegistry {
             Some(handle) => {
                 if matches!(state, ProcessState::Running { .. }) {
                     handle.started_at = Some(unix_now());
+                } else if matches!(state, ProcessState::Stopped | ProcessState::Errored { .. }) {
+                    handle.memory_bytes = None;
+                    handle.cpu_pct = None;
                 }
                 handle.state = state;
                 true

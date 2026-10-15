@@ -23,11 +23,6 @@ pub fn print_process_table(processes: &[ProcessInfo], full_cmd: bool) {
             _ => "-".to_string(),
         };
 
-        let cpu_str = match p.cpu_pct {
-            Some(cpu) => format!("{:.1}%", cpu),
-            None => "-".to_string(),
-        };
-
         let cmd_str = if full_cmd || p.command.len() <= 28 {
             p.command.clone()
         } else {
@@ -39,7 +34,7 @@ pub fn print_process_table(processes: &[ProcessInfo], full_cmd: bool) {
             p.name.clone(),
             p.state.label().to_string(),
             p.mode.clone(),
-            cpu_str,
+            p.cpu_display(),
             p.memory_display(),
             uptime_str,
             p.restart_count.to_string(),
