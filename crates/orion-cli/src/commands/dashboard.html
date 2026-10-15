@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orion Dashboard — Process Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060608;
+      --card-bg: rgba(18, 18, 24, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-border-hover: rgba(255, 255, 255, 0.16);
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-subtle: #475569;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --online: #10b981;
+      --online-glow: rgba(16, 185, 129, 0.2);
+      --restarting: #f59e0b;
+      --restarting-glow: rgba(245, 158, 11, 0.2);
+      --stopped: #64748b;
+      --errored: #ef4444;
+      --errored-glow: rgba(239, 68, 68, 0.2);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.04) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(16, 185, 129, 0.03) 0%, transparent 40%);
+      color: var(--text);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Custom sleek scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+    /* Top Navigation Bar */
+    header {
+      background: rgba(10, 10, 14, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 0 2rem;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #000;
+      font-weight: 800;
+      font-size: 1.1rem;
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-tag {
+      font-size: 0.7rem;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--accent);
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--online);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+      animation: pulse-ring 2s infinite cubic-bezier(0.455, 0.03, 0.515, 0.955);
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem 0.85rem;
+      border-radius: 7px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-family: var(--font-sans);
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: var(--card-border-hover);
+      color: #fff;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+      border-color: transparent;
+    }
+
+    .btn-primary:hover {
+      background: #7dd3fc;
+      box-shadow: 0 0 12px var(--accent-glow);
+      color: #000;
+    }
+
+    .btn-icon {
+      padding: 0.4rem;
+      border-radius: 6px;
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.75rem;
+    }
+
+    /* Metric Cards Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+
+    .metric-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .metric-card:hover {
+      border-color: var(--card-border-hover);
+    }
+
+    .metric-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .metric-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      display: flex;
+      align-items: baseline;
+      gap: 0.35rem;
+    }
+
+    .metric-sub {
+      font-size: 0.8rem;
+      color: var(--text-subtle);
+      font-family: var(--font-mono);
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #38bdf8 0%, #10b981 100%);
+      transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Control & Filter Header */
+    .table-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .search-input {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      padding: 0.5rem 0.85rem;
+      border-radius: 8px;
+      width: 280px;
+      transition: all 0.2s;
+    }
+
+    .search-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    .table-container {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.85rem;
+    }
+
+    thead {
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    th {
+      padding: 0.9rem 1.25rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      transition: background 0.15s ease;
+    }
+
+    tbody tr:last-child {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    td {
+      padding: 0.95rem 1.25rem;
+      vertical-align: middle;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+
+    .badge-online {
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--online);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .badge-restarting {
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--restarting);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .badge-stopped {
+      background: rgba(100, 116, 139, 0.12);
+      color: var(--stopped);
+      border: 1px solid rgba(100, 116, 139, 0.3);
+    }
+
+    .badge-errored {
+      background: rgba(239, 68, 68, 0.12);
+      color: var(--errored);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .proc-name {
+      font-weight: 600;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .proc-id {
+      font-family: var(--font-mono);
+      color: var(--text-subtle);
+      font-size: 0.75rem;
+    }
+
+    .proc-cmd {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mono-cell {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+    }
+
+    .actions-cell {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .btn-action {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 0.35rem 0.55rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-action:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border-color: var(--card-border-hover);
+    }
+
+    .btn-action.btn-danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--errored);
+      border-color: var(--errored);
+    }
+
+    /* Modal Styling */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 1rem;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal-card {
+      background: #0d0d12;
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      width: 100%;
+      max-width: 650px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.015);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.75rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .form-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .form-control {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      padding: 0.6rem 0.85rem;
+      border-radius: 8px;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    /* Log Viewer Drawer */
+    .log-terminal {
+      background: #050507;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      height: 380px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      line-height: 1.45;
+    }
+
+    .log-ts {
+      color: var(--text-subtle);
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .log-stream-out {
+      color: #38bdf8;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .log-stream-err {
+      color: #f87171;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .log-text {
+      color: #e2e8f0;
+      flex: 1;
+    }
+
+    /* Toast Notification */
+    .toast-container {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      z-index: 150;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: #181822;
+      border: 1px solid var(--card-border-hover);
+      color: #fff;
+      padding: 0.75rem 1.15rem;
+      border-radius: 9px;
+      font-size: 0.85rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      pointer-events: auto;
+      animation: toast-in 0.25s ease;
+    }
+
+    @keyframes toast-in {
+      from { transform: translateY(12px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding: 1.5rem 2rem;
+      text-align: center;
+      color: var(--text-subtle);
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+
+    footer a:hover {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <header>
+    <a href="/" class="brand">
+      <div class="brand-icon">⚡</div>
+      <div class="brand-title">
+        Orion
+        <span class="brand-tag">v0.1.4</span>
+      </div>
+    </a>
+
+    <div class="nav-actions">
+      <div class="status-pill" id="connStatus">
+        <span class="pulse-dot"></span>
+        <span id="connText">CONNECTED</span>
+      </div>
+      <button class="btn btn-primary" onclick="openStartModal()">
+        <span>+</span> Start Process
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Dashboard -->
+  <main>
+    <!-- System Metrics Overview -->
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span>Processes Active</span>
+          <span>⚡</span>
+        </div>
+        <div class="metric-value">
+          <span id="activeCount">0</span>
+          <span class="metric-sub">/ <span id="totalCount">0</span> total</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="activeBar" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span>Host CPU</span>
+          <span id="cpuPill">0%</span>
+        </div>
+        <div class="metric-value">
+          <span id="hostCpu">0.0</span>
+          <span class="metric-sub">%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="cpuBar" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span>Host Memory</span>
+          <span id="memPill">0%</span>
+        </div>
+        <div class="metric-value">
+          <span id="hostMemUsed">0</span>
+          <span class="metric-sub">MB / <span id="hostMemTotal">0</span> MB</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="memBar" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span>System Uptime</span>
+          <span>⏱</span>
+        </div>
+        <div class="metric-value">
+          <span id="hostUptime">-</span>
+        </div>
+        <div class="metric-sub" id="osInfo">Linux x86_64</div>
+      </div>
+    </section>
+
+    <!-- Table Header Controls -->
+    <section class="table-controls">
+      <input type="text" id="procSearch" class="search-input" placeholder="Search processes (name, cmd, id)..." oninput="renderProcessTable()">
+      
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn" onclick="fetchData()">
+          ↻ Refresh
+        </button>
+      </div>
+    </section>
+
+    <!-- Process Table -->
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Mode</th>
+            <th>CPU</th>
+            <th>Memory</th>
+            <th>Uptime</th>
+            <th>Restarts</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="processTableBody">
+          <tr>
+            <td colspan="9" style="text-align: center; color: var(--text-subtle); padding: 3rem;">
+              Connecting to Orion daemon...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <!-- Start Process Modal -->
+  <div class="modal-overlay" id="startModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Start New Process</h3>
+        <button class="btn btn-icon" onclick="closeStartModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Script / Binary Path or Command</label>
+          <input type="text" id="startScript" class="form-control" placeholder="e.g. app.js, /usr/bin/python3 main.py, ./server">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Process Name (optional)</label>
+          <input type="text" id="startName" class="form-control" placeholder="e.g. api-server">
+        </div>
+        <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div>
+            <label class="form-label">Instances</label>
+            <input type="number" id="startInstances" class="form-control" value="1" min="1" max="64">
+          </div>
+          <div>
+            <label class="form-label">Working Directory (optional)</label>
+            <input type="text" id="startCwd" class="form-control" placeholder=".">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 0.5rem;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+            <input type="checkbox" id="startWatch">
+            <span>Watch mode (auto-restart on file change)</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeStartModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitStart()">Launch Process</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scale Modal -->
+  <div class="modal-overlay" id="scaleModal">
+    <div class="modal-card" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Scale Process</h3>
+        <button class="btn btn-icon" onclick="closeScaleModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-muted);" id="scaleTargetDesc">
+          Adjust instances for process
+        </p>
+        <div class="form-group">
+          <label class="form-label">Target Instances</label>
+          <input type="number" id="scaleCount" class="form-control" min="1" max="128" value="2">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeScaleModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitScale()">Apply Scale</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log Viewer Modal -->
+  <div class="modal-overlay" id="logModal">
+    <div class="modal-card" style="max-width: 900px;">
+      <div class="modal-header">
+        <h3 class="modal-title" id="logTitle">Process Logs</h3>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <select id="logLinesSelect" class="form-control" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" onchange="refreshCurrentLogs()">
+            <option value="50">50 lines</option>
+            <option value="100" selected>100 lines</option>
+            <option value="250">250 lines</option>
+            <option value="500">500 lines</option>
+          </select>
+          <button class="btn btn-icon" onclick="closeLogModal()">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 1rem;">
+        <div class="log-terminal" id="logContent">
+          <div style="color: var(--text-subtle);">Fetching logs...</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <div style="font-size: 0.75rem; color: var(--text-subtle);">
+          Auto-refreshing every 2s
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn" onclick="clearLogs()">Flush Logs</button>
+          <button class="btn btn-primary" onclick="refreshCurrentLogs()">Refresh</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Footer -->
+  <footer>
+    <div>
+      <strong>Orion</strong> — Industrial-grade Process Manager. Built by 
+      <a href="https://atlasresearchlabs.online" target="_blank">Atlas Research Labs</a>.
+    </div>
+    <div>
+      <a href="https://github.com/AtlasResearch-Labs/Orionpm" target="_blank">GitHub</a> • 
+      <a href="https://www.npmjs.com/package/orionpm" target="_blank">NPM</a>
+    </div>
+  </footer>
+
+  <script>
+    let globalProcesses = [];
+    let activeLogProcess = null;
+    let logPollTimer = null;
+    let scalingProcessName = null;
+
+    // Toast utility
+    function showToast(msg, isError = false) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      if (isError) toast.style.borderColor = 'var(--errored)';
+      toast.innerHTML = `<span>${isError ? '✕' : '✓'}</span> <span>${msg}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3500);
+    }
+
+    // Connect Server-Sent Events (SSE)
+    function initSSE() {
+      const connStatus = document.getElementById('connStatus');
+      const connText = document.getElementById('connText');
+      const es = new EventSource('/api/events');
+
+      es.onopen = () => {
+        connStatus.style.borderColor = 'rgba(16, 185, 129, 0.25)';
+        connStatus.style.color = 'var(--online)';
+        connText.innerText = 'CONNECTED';
+      };
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          updateDashboard(data);
+        } catch (e) {
+          console.error('Error parsing SSE data', e);
+        }
+      };
+
+      es.onerror = () => {
+        connStatus.style.borderColor = 'rgba(239, 68, 68, 0.25)';
+        connStatus.style.color = 'var(--errored)';
+        connText.innerText = 'RECONNECTING...';
+      };
+    }
+
+    async function fetchData() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        updateDashboard(data);
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    }
+
+    function updateDashboard(data) {
+      if (!data) return;
+      globalProcesses = data.processes || [];
+
+      // Update System Metrics
+      if (data.system) {
+        const sys = data.system;
+        document.getElementById('hostCpu').innerText = sys.cpu_pct.toFixed(1);
+        document.getElementById('cpuPill').innerText = `${sys.cpu_pct.toFixed(0)}%`;
+        document.getElementById('cpuBar').style.width = `${Math.min(sys.cpu_pct, 100)}%`;
+
+        document.getElementById('hostMemUsed').innerText = sys.memory_used_mb;
+        document.getElementById('hostMemTotal').innerText = sys.memory_total_mb;
+        const memPct = sys.memory_total_mb > 0 ? (sys.memory_used_mb / sys.memory_total_mb) * 100 : 0;
+        document.getElementById('memPill').innerText = `${memPct.toFixed(0)}%`;
+        document.getElementById('memBar').style.width = `${Math.min(memPct, 100)}%`;
+
+        document.getElementById('hostUptime').innerText = sys.uptime || '-';
+        if (sys.os) document.getElementById('osInfo').innerText = sys.os;
+      }
+
+      // Active / Total counter
+      const activeCount = globalProcesses.filter(p => p.state && (p.state === 'running' || typeof p.state === 'object' && 'running' in p.state)).length;
+      document.getElementById('activeCount').innerText = activeCount;
+      document.getElementById('totalCount').innerText = globalProcesses.length;
+      const activePct = globalProcesses.length > 0 ? (activeCount / globalProcesses.length) * 100 : 0;
+      document.getElementById('activeBar').style.width = `${activePct}%`;
+
+      renderProcessTable();
+    }
+
+    function renderProcessTable() {
+      const tbody = document.getElementById('processTableBody');
+      const search = (document.getElementById('procSearch').value || '').toLowerCase();
+
+      const filtered = globalProcesses.filter(p => {
+        return p.name.toLowerCase().includes(search) || 
+               p.command.toLowerCase().includes(search) || 
+               p.id.toString().includes(search);
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="9" style="text-align: center; color: var(--text-subtle); padding: 3rem;">
+              No managed processes found.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(p => {
+        // Resolve State Label
+        let stateLabel = 'stopped';
+        let badgeClass = 'badge-stopped';
+
+        if (typeof p.state === 'string') {
+          stateLabel = p.state;
+        } else if (p.state && typeof p.state === 'object') {
+          const key = Object.keys(p.state)[0];
+          stateLabel = key || 'unknown';
+        }
+
+        if (stateLabel === 'running') {
+          stateLabel = 'online';
+          badgeClass = 'badge-online';
+        } else if (stateLabel === 'restarting' || stateLabel === 'starting') {
+          badgeClass = 'badge-restarting';
+        } else if (stateLabel === 'errored') {
+          badgeClass = 'badge-errored';
+        }
+
+        const isAlive = (stateLabel === 'online' || stateLabel === 'restarting');
+        const cpuDisplay = isAlive && p.cpu_pct !== null && p.cpu_pct !== undefined ? `${p.cpu_pct.toFixed(1)}%` : '0.0%';
+        const memDisplay = isAlive && p.memory_bytes ? `${(p.memory_bytes / 1048576).toFixed(1)} MB` : '0 B';
+        const uptimeDisplay = isAlive && p.started_at ? formatUptime(p.started_at) : '-';
+
+        return `
+          <tr>
+            <td>
+              <span class="badge ${badgeClass}">
+                <span class="pulse-dot"></span>
+                ${stateLabel}
+              </span>
+            </td>
+            <td class="proc-id">${p.id}</td>
+            <td>
+              <div class="proc-name">${escapeHtml(p.name)}</div>
+              <div class="proc-cmd">${escapeHtml(p.command)}</div>
+            </td>
+            <td class="mono-cell">${escapeHtml(p.mode || 'fork')}</td>
+            <td class="mono-cell">${cpuDisplay}</td>
+            <td class="mono-cell">${memDisplay}</td>
+            <td class="mono-cell">${uptimeDisplay}</td>
+            <td class="mono-cell">${p.restart_count}</td>
+            <td>
+              <div class="actions-cell">
+                ${isAlive ? `
+                  <button class="btn-action" title="Restart" onclick="processAction('${p.name}', 'restart')">↻</button>
+                  <button class="btn-action" title="Reload (Zero-downtime)" onclick="processAction('${p.name}', 'reload')">⚡</button>
+                  <button class="btn-action" title="Stop" onclick="processAction('${p.name}', 'stop')">⏹</button>
+                ` : `
+                  <button class="btn-action" title="Start" onclick="processAction('${p.name}', 'restart')">▶</button>
+                `}
+                <button class="btn-action" title="Scale" onclick="openScaleModal('${p.name}')">⛶</button>
+                <button class="btn-action" title="View Logs" onclick="openLogModal('${p.name}')">📜</button>
+                <button class="btn-action btn-danger" title="Delete" onclick="deleteProcess('${p.name}')">✕</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function formatUptime(startedAt) {
+      const now = Math.floor(Date.now() / 1000);
+      const diff = Math.max(0, now - startedAt);
+      if (diff < 60) return `${diff}s`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`;
+      return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Process Actions
+    async function processAction(name, action) {
+      try {
+        const res = await fetch(`/api/processes/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+        const body = await res.json();
+        if (body.ok) {
+          showToast(`Process '${name}' ${action}ed`);
+          fetchData();
+        } else {
+          showToast(body.error || `Failed to ${action} process`, true);
+        }
+      } catch (e) {
+        showToast(`Request failed: ${e.message}`, true);
+      }
+    }
+
+    async function deleteProcess(name) {
+      if (!confirm(`Are you sure you want to stop and delete process '${name}'?`)) return;
+      processAction(name, 'delete');
+    }
+
+    // Start Modal
+    function openStartModal() {
+      document.getElementById('startModal').classList.add('open');
+      document.getElementById('startScript').focus();
+    }
+    function closeStartModal() {
+      document.getElementById('startModal').classList.remove('open');
+    }
+
+    async function submitStart() {
+      const script = document.getElementById('startScript').value.trim();
+      if (!script) {
+        showToast('Please specify a script or command', true);
+        return;
+      }
+      const name = document.getElementById('startName').value.trim() || undefined;
+      const instances = parseInt(document.getElementById('startInstances').value, 10) || 1;
+      const cwd = document.getElementById('startCwd').value.trim() || undefined;
+      const watch = document.getElementById('startWatch').checked;
+
+      try {
+        const res = await fetch('/api/processes/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ script, name, instances, cwd, watch })
+        });
+        const body = await res.json();
+        if (body.ok) {
+          showToast(`Started process '${name || script}'`);
+          closeStartModal();
+          fetchData();
+        } else {
+          showToast(body.error || 'Failed to start process', true);
+        }
+      } catch (e) {
+        showToast(`Error: ${e.message}`, true);
+      }
+    }
+
+    // Scale Modal
+    function openScaleModal(name) {
+      scalingProcessName = name;
+      document.getElementById('scaleTargetDesc').innerText = `Target instances for cluster '${name}'`;
+      document.getElementById('scaleModal').classList.add('open');
+    }
+    function closeScaleModal() {
+      document.getElementById('scaleModal').classList.remove('open');
+    }
+
+    async function submitScale() {
+      const count = parseInt(document.getElementById('scaleCount').value, 10);
+      if (!count || count < 1) return;
+      try {
+        const res = await fetch(`/api/processes/${encodeURIComponent(scalingProcessName)}/scale`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count })
+        });
+        const body = await res.json();
+        if (body.ok) {
+          showToast(`Scaled '${scalingProcessName}' to ${count} instance(s)`);
+          closeScaleModal();
+          fetchData();
+        } else {
+          showToast(body.error || 'Scaling failed', true);
+        }
+      } catch (e) {
+        showToast(`Error: ${e.message}`, true);
+      }
+    }
+
+    // Logs Modal
+    function openLogModal(name) {
+      activeLogProcess = name;
+      document.getElementById('logTitle').innerText = `Logs for '${name}'`;
+      document.getElementById('logModal').classList.add('open');
+      refreshCurrentLogs();
+      if (logPollTimer) clearInterval(logPollTimer);
+      logPollTimer = setInterval(refreshCurrentLogs, 2000);
+    }
+
+    function closeLogModal() {
+      document.getElementById('logModal').classList.remove('open');
+      if (logPollTimer) clearInterval(logPollTimer);
+      activeLogProcess = null;
+    }
+
+    async function refreshCurrentLogs() {
+      if (!activeLogProcess) return;
+      const lines = document.getElementById('logLinesSelect').value || 100;
+      try {
+        const res = await fetch(`/api/processes/${encodeURIComponent(activeLogProcess)}/logs?lines=${lines}`);
+        const data = await res.json();
+        renderLogs(data.lines || []);
+      } catch (e) {
+        console.error('Error fetching logs', e);
+      }
+    }
+
+    function renderLogs(lines) {
+      const container = document.getElementById('logContent');
+      if (!lines || lines.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-subtle);">No log output recorded yet.</div>';
+        return;
+      }
+      const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+
+      container.innerHTML = lines.map(line => {
+        const d = new Date(line.timestamp * 1000);
+        const timeStr = d.toTimeString().split(' ')[0];
+        const streamClass = line.stream === 'stderr' ? 'log-stream-err' : 'log-stream-out';
+        const streamTag = line.stream === 'stderr' ? '[err]' : '[out]';
+        return `
+          <div class="log-line">
+            <span class="log-ts">${timeStr}</span>
+            <span class="${streamClass}">${streamTag}</span>
+            <span class="log-text">${escapeHtml(line.text)}</span>
+          </div>
+        `;
+      }).join('');
+
+      if (isAtBottom) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    async function clearLogs() {
+      if (!activeLogProcess) return;
+      try {
+        await fetch(`/api/processes/${encodeURIComponent(activeLogProcess)}/flush`, { method: 'POST' });
+        showToast(`Logs flushed for ${activeLogProcess}`);
+        refreshCurrentLogs();
+      } catch (e) {
+        showToast(`Failed to flush logs: ${e.message}`, true);
+      }
+    }
+
+    // Initial boot
+    initSSE();
+    fetchData();
+  </script>
+</body>
+</html>
