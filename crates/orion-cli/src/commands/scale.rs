@@ -11,6 +11,7 @@ pub struct ScaleArgs {
     pub target: String,
 
     /// Target instance count (e.g. 4) or delta (e.g. +2, -1).
+    #[arg(allow_hyphen_values = true)]
     pub count: String,
 }
 
@@ -31,5 +32,27 @@ pub async fn run(args: ScaleArgs) -> Result<()> {
             Ok(())
         }
         _ => bail!("Unexpected response from daemon"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        scale: ScaleArgs,
+    }
+
+    #[test]
+    fn test_scale_negative_arg_parsing() {
+        let args = Cli::try_parse_from(["orion", "app", "-1"]).expect("failed to parse -1");
+        assert_eq!(args.scale.target, "app");
+        assert_eq!(args.scale.count, "-1");
+
+        let args_pos = Cli::try_parse_from(["orion", "app", "+2"]).expect("failed to parse +2");
+        assert_eq!(args_pos.scale.count, "+2");
     }
 }

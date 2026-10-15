@@ -31,3 +31,4 @@ service-manager = { workspace = true }
 notify = { workspace = true }
 lettre = { workspace = true }
 reqwest = { workspace = true }
+libc = { workspace = true }

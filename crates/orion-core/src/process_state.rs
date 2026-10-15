@@ -28,6 +28,9 @@ pub enum ProcessState {
         /// Human-readable reason for entering the errored state.
         message: String,
     },
+
+    /// oriond is waiting through backoff delay before restarting the child.
+    Restarting,
 }
 
 impl ProcessState {
@@ -40,12 +43,16 @@ impl ProcessState {
             ProcessState::Stopping => "stopping",
             ProcessState::Stopped => "stopped",
             ProcessState::Errored { .. } => "errored",
+            ProcessState::Restarting => "restarting",
         }
     }
 
     /// Returns true if the process is currently expected to be consuming resources.
     pub fn is_active(&self) -> bool {
-        matches!(self, ProcessState::Starting | ProcessState::Running { .. })
+        matches!(
+            self,
+            ProcessState::Starting | ProcessState::Running { .. } | ProcessState::Restarting
+        )
     }
 }
 
@@ -152,6 +159,7 @@ mod tests {
                 exit_code: Some(1),
                 message: "crash".to_string(),
             },
+            ProcessState::Restarting,
         ];
         for state in &states {
             let label = state.label();

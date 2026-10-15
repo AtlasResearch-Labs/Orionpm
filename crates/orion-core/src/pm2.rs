@@ -304,6 +304,7 @@ fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<Stri
             max_cpu_pct: 0.0,
             alerts: AlertConfig::default(),
             health: None,
+            smtp: None,
         };
 
         result.insert(name, app_config);
@@ -460,6 +461,7 @@ mod tests {
                 max_cpu_pct: 0.0,
                 alerts: AlertConfig::default(),
                 health: None,
+                smtp: None,
             },
         );
 

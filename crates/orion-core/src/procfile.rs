@@ -8,7 +8,7 @@ use crate::config::{AppConfig, ExecutionMode, RestartPolicy};
 pub fn parse_procfile(path: &Path) -> Result<Vec<(String, AppConfig)>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read Procfile: {}", path.display()))?;
-    let parent = path.parent();
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     parse_procfile_str(&content, parent)
 }
 
@@ -17,6 +17,10 @@ pub fn parse_procfile_str(
     content: &str,
     base_dir: Option<&Path>,
 ) -> Result<Vec<(String, AppConfig)>> {
+    let cwd_val = match base_dir {
+        Some(b) if !b.as_os_str().is_empty() => Some(b.to_path_buf()),
+        _ => std::env::current_dir().ok().or_else(|| Some(PathBuf::from("."))),
+    };
     let mut apps = Vec::new();
 
     for (line_num, raw_line) in content.lines().enumerate() {
@@ -92,7 +96,7 @@ pub fn parse_procfile_str(
         let app_config = AppConfig {
             command,
             args,
-            cwd: base_dir.map(PathBuf::from),
+            cwd: cwd_val.clone(),
             name: Some(name.to_string()),
             instances: 1,
             mode: ExecutionMode::Fork,
@@ -116,6 +120,7 @@ pub fn parse_procfile_str(
             max_cpu_pct: 0.0,
             alerts: Default::default(),
             health: None,
+            smtp: None,
         };
 
         apps.push((name.to_string(), app_config));
@@ -237,5 +242,15 @@ worker: python -u worker.py --concurrency 4
         let content = "just a random line without colon\n";
         let result = parse_procfile_str(content, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_procfile_cwd_not_empty() {
+        let content = "web: npm start\n";
+        // Passing Some(Path::new("")) should be sanitized to current directory, never empty string
+        let apps = parse_procfile_str(content, Some(Path::new(""))).expect("failed to parse");
+        assert_eq!(apps.len(), 1);
+        let cwd = apps[0].1.cwd.as_ref().expect("cwd must be set");
+        assert!(!cwd.as_os_str().is_empty());
     }
 }

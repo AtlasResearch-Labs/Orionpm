@@ -101,6 +101,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub alerts: AlertConfig,
 
+    /// Optional SMTP configuration for email alert delivery.
+    #[serde(default)]
+    pub smtp: Option<SmtpConfig>,
+
     /// Health check probe configuration for this app (HTTP or TCP).
     #[serde(default)]
     pub health: Option<HealthConfig>,
@@ -255,7 +259,15 @@ impl OrionConfig {
     /// Parse a orion.toml from a raw TOML string.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(raw: &str) -> Result<Self> {
-        toml::from_str(raw).context("Failed to parse orion.toml")
+        let mut config: Self = toml::from_str(raw).context("Failed to parse orion.toml")?;
+        if let Some(ref smtp) = config.smtp {
+            for app in config.apps.values_mut() {
+                if app.smtp.is_none() {
+                    app.smtp = Some(smtp.clone());
+                }
+            }
+        }
+        Ok(config)
     }
 
     /// Validate all app configs for logical consistency.

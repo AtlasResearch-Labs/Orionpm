@@ -47,8 +47,9 @@ async fn run_supervisor_loop(
         let watch_ignore = config.watch_ignore.clone();
         let watcher_cancel = cancel_token.clone();
         let app_name = name.clone();
+        let app_cwd = config.cwd.clone();
         tokio::spawn(async move {
-            run_file_watcher(app_name, watch_paths, watch_ignore, tx, watcher_cancel).await;
+            run_file_watcher(app_name, app_cwd, watch_paths, watch_ignore, tx, watcher_cancel).await;
         });
         Some(rx)
     } else {
@@ -69,7 +70,9 @@ async fn run_supervisor_loop(
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
         if let Some(ref cwd) = config.cwd {
-            cmd.current_dir(cwd);
+            if !cwd.as_os_str().is_empty() {
+                cmd.current_dir(cwd);
+            }
         }
         for (k, v) in &config.env {
             cmd.env(k, v);
@@ -77,6 +80,11 @@ async fn run_supervisor_loop(
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        {
+            cmd.process_group(0);
+        }
 
         // Under Windows, ensure process can be cleanly terminated without popping a console window
         #[cfg(windows)]
@@ -136,14 +144,30 @@ async fn run_supervisor_loop(
                 }
 
                 restart_count += 1;
+                registry.increment_restarts(&name);
+                registry.set_state(&name, ProcessState::Restarting);
+
                 if config.max_restarts > 0 && restart_count >= config.max_restarts {
                     warn!(name = %name, "Max restarts reached on spawn failure");
+                    registry.set_state(
+                        &name,
+                        ProcessState::Errored {
+                            exit_code: None,
+                            message: format!("Max restarts ({}) reached on spawn failure", config.max_restarts),
+                        },
+                    );
                     break;
                 }
 
+                let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
+                let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+
                 tokio::select! {
-                    _ = sleep(Duration::from_millis(config.restart_delay_ms)) => continue,
-                    _ = cancel_token.cancelled() => break,
+                    _ = sleep(Duration::from_millis(effective_delay_ms)) => continue,
+                    _ = cancel_token.cancelled() => {
+                        registry.set_state(&name, ProcessState::Stopped);
+                        break;
+                    }
                 }
             }
         };
@@ -260,11 +284,15 @@ async fn run_supervisor_loop(
             _ = cancel_token.cancelled() => {
                 probe_cancel.cancel();
                 info!(name = %name, pid = pid, "Received stop signal, terminating process");
-                registry.set_state(&name, ProcessState::Stopping);
+                let is_restarting = matches!(registry.get_state(&name), Some(ProcessState::Restarting));
+                if !is_restarting {
+                    registry.set_state(&name, ProcessState::Stopping);
+                }
 
-                // Gracefully kill process
-                let _ = child.kill().await;
-                registry.set_state(&name, ProcessState::Stopped);
+                graceful_terminate_child(&mut child, pid, 4).await;
+                if !is_restarting {
+                    registry.set_state(&name, ProcessState::Stopped);
+                }
                 info!(name = %name, "Process stopped gracefully");
                 break;
             }
@@ -284,8 +312,7 @@ async fn run_supervisor_loop(
                         text: format!("[orion] File change detected: {}. Restarting...", changed_path.display()),
                     },
                 );
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                graceful_terminate_child(&mut child, pid, 4).await;
                 file_change_triggered = true;
                 None
             }
@@ -302,8 +329,7 @@ async fn run_supervisor_loop(
                         text: err_msg,
                     },
                 );
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                graceful_terminate_child(&mut child, pid, 4).await;
                 health_failure_triggered = true;
                 None
             }
@@ -322,7 +348,7 @@ async fn run_supervisor_loop(
 
         info!(name = %name, exit_code = ?exit_code, success = success, "Process exited");
 
-        // Fire alert webhook if configured and process crashed or failed health check
+        // Fire alerts if configured and process crashed or failed health check
         if !success {
             if let Some(ref webhook_url) = config.alerts.on_crash_webhook {
                 let url = webhook_url.clone();
@@ -331,6 +357,18 @@ async fn run_supervisor_loop(
                 tokio::spawn(async move {
                     send_crash_webhook(&url, &app_name, code).await;
                 });
+            }
+
+            if let Some(ref email) = config.alerts.on_crash_email {
+                if let Some(ref smtp) = config.smtp {
+                    let smtp_cfg = smtp.clone();
+                    let recipient = email.clone();
+                    let app_name = name.clone();
+                    let code = exit_code;
+                    tokio::spawn(async move {
+                        send_crash_email(&smtp_cfg, &recipient, &app_name, code).await;
+                    });
+                }
             }
         }
 
@@ -455,6 +493,8 @@ async fn run_supervisor_loop(
             "Restarting process after backoff delay"
         );
 
+        registry.set_state(&name, ProcessState::Restarting);
+
         tokio::select! {
             _ = sleep(Duration::from_millis(effective_delay_ms)) => {},
             _ = cancel_token.cancelled() => {
@@ -489,6 +529,7 @@ async fn run_supervisor_loop(
 /// and debounces change events by 300ms before notifying the supervisor.
 async fn run_file_watcher(
     app_name: String,
+    app_cwd: Option<PathBuf>,
     paths: Vec<PathBuf>,
     ignore_patterns: Vec<String>,
     notify_tx: tokio::sync::mpsc::Sender<PathBuf>,
@@ -511,10 +552,23 @@ async fn run_file_watcher(
         }
     };
 
-    let watch_targets = if paths.is_empty() {
-        vec![PathBuf::from(".")]
+    let base_dir = app_cwd.unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+
+    let watch_targets: Vec<PathBuf> = if paths.is_empty() {
+        vec![base_dir]
     } else {
         paths
+            .into_iter()
+            .map(|p| {
+                if p.is_relative() {
+                    base_dir.join(p)
+                } else {
+                    p
+                }
+            })
+            .collect()
     };
 
     for target in &watch_targets {
@@ -570,32 +624,168 @@ async fn run_file_watcher(
 }
 
 /// Checks whether a given path matches built-in system ignores or custom user ignore patterns.
-fn is_ignored(path: &Path, ignore_patterns: &[String]) -> bool {
-    let path_str = path.to_string_lossy();
-    if path_str.contains(".git")
-        || path_str.contains("node_modules")
-        || path_str.contains("target")
-        || path_str.contains(".orion")
-        || path_str.ends_with(".db")
-        || path_str.ends_with(".db-journal")
-        || path_str.ends_with(".log")
-        || path_str.ends_with('~')
-        || path_str.ends_with(".tmp")
+pub fn is_ignored(path: &Path, ignore_patterns: &[String]) -> bool {
+    // Check path components to avoid substring collisions (e.g. target vs targets.js, .git vs .github)
+    for component in path.components() {
+        let comp = component.as_os_str().to_string_lossy();
+        if comp == ".git" || comp == "node_modules" || comp == "target" || comp == ".orion" {
+            return true;
+        }
+    }
+
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+
+    if file_name.starts_with(".#")
+        || file_name.ends_with('~')
+        || file_name.ends_with(".db")
+        || file_name.ends_with(".db-journal")
+        || file_name.ends_with(".log")
+        || file_name.ends_with(".tmp")
     {
         return true;
     }
 
+    let path_str = path.to_string_lossy();
     for pat in ignore_patterns {
-        if pat.starts_with("*.") {
-            let ext = &pat[1..];
+        if let Some(ext) = pat.strip_prefix("*.") {
             if path_str.ends_with(ext) {
                 return true;
             }
-        } else if path_str.contains(pat) {
+        } else if pat == &file_name || path.components().any(|c| c.as_os_str() == pat.as_str()) {
             return true;
         }
     }
     false
+}
+
+#[cfg(unix)]
+async fn graceful_terminate_child(
+    child: &mut tokio::process::Child,
+    pid: u32,
+    timeout_secs: u64,
+) {
+    if pid == 0 {
+        let _ = child.kill().await;
+        return;
+    }
+
+    unsafe {
+        // Send SIGTERM to the process group (-pid) and directly to the process
+        libc::kill(-(pid as i32), libc::SIGTERM);
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+
+    let grace_duration = Duration::from_secs(timeout_secs.max(1));
+    let wait_res = tokio::time::timeout(grace_duration, child.wait()).await;
+
+    if wait_res.is_err() {
+        warn!(pid = pid, "Process did not exit after SIGTERM grace period; escalating to SIGKILL");
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+}
+
+#[cfg(windows)]
+async fn graceful_terminate_child(
+    child: &mut tokio::process::Child,
+    pid: u32,
+    timeout_secs: u64,
+) {
+    if pid == 0 {
+        let _ = child.kill().await;
+        return;
+    }
+
+    // Attempt graceful taskkill without /F
+    let _ = tokio::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string()])
+        .output()
+        .await;
+
+    let grace_duration = Duration::from_secs(timeout_secs.max(1));
+    let wait_res = tokio::time::timeout(grace_duration, child.wait()).await;
+
+    if wait_res.is_err() {
+        warn!(pid = pid, "Process did not exit gracefully; escalating to forceful termination");
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+}
+
+async fn send_crash_email(
+    smtp: &orion_core::config::SmtpConfig,
+    recipient: &str,
+    app_name: &str,
+    exit_code: Option<i32>,
+) {
+    use lettre::message::header::ContentType;
+    use lettre::transport::smtp::authentication::Credentials;
+    use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+
+    let password = std::env::var(&smtp.password_env).unwrap_or_default();
+    let from_addr = match smtp.from.parse() {
+        Ok(f) => f,
+        Err(e) => {
+            error!(from = %smtp.from, error = %e, "Invalid SMTP from address");
+            return;
+        }
+    };
+    let to_addr = match recipient.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            error!(to = %recipient, error = %e, "Invalid SMTP to address");
+            return;
+        }
+    };
+
+    let email = match Message::builder()
+        .from(from_addr)
+        .to(to_addr)
+        .subject(format!("[Orion Alert] Process '{}' Crashed", app_name))
+        .header(ContentType::TEXT_PLAIN)
+        .body(format!(
+            "Process '{}' managed by Orion crashed.\nExit code: {:?}\nTimestamp: {}\n",
+            app_name,
+            exit_code,
+            unix_now()
+        )) {
+        Ok(m) => m,
+        Err(e) => {
+            error!(error = %e, "Failed to build crash alert email");
+            return;
+        }
+    };
+
+    let creds = Credentials::new(smtp.username.clone(), password);
+    let builder_res = if smtp.tls {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host)
+    } else {
+        Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host))
+    };
+
+    match builder_res {
+        Ok(b) => {
+            let mailer = b.port(smtp.port).credentials(creds).build();
+            match mailer.send(email).await {
+                Ok(_) => info!(app = %app_name, to = %recipient, "Sent crash alert email"),
+                Err(e) => error!(app = %app_name, error = %e, "Failed to send crash alert email"),
+            }
+        }
+        Err(e) => {
+            error!(host = %smtp.host, error = %e, "Failed to create SMTP transport");
+        }
+    }
 }
 
 async fn send_crash_webhook(url: &str, app_name: &str, exit_code: Option<i32>) {
@@ -673,6 +863,39 @@ async fn run_health_probe(
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_is_ignored_path_components() {
+        let empty_custom: Vec<String> = vec![];
+
+        // Must NOT ignore files containing substring 'target' or '.git'
+        assert!(!is_ignored(Path::new("targets.js"), &empty_custom));
+        assert!(!is_ignored(Path::new("src/targets.js"), &empty_custom));
+        assert!(!is_ignored(Path::new("retarget.ts"), &empty_custom));
+        assert!(!is_ignored(Path::new(".github/workflows/ci.yml"), &empty_custom));
+
+        // Must ignore actual directories and special files
+        assert!(is_ignored(Path::new("target/debug/build"), &empty_custom));
+        assert!(is_ignored(Path::new(".git/HEAD"), &empty_custom));
+        assert!(is_ignored(Path::new("node_modules/express/index.js"), &empty_custom));
+        assert!(is_ignored(Path::new(".orion/orion.db"), &empty_custom));
+        assert!(is_ignored(Path::new("app.log"), &empty_custom));
+        assert!(is_ignored(Path::new("index.js~"), &empty_custom));
+    }
+
+    #[test]
+    fn test_is_ignored_custom_patterns() {
+        let custom = vec!["*.tmp".to_string(), "dist".to_string()];
+        assert!(is_ignored(Path::new("cache.tmp"), &custom));
+        assert!(is_ignored(Path::new("dist/bundle.js"), &custom));
+        assert!(!is_ignored(Path::new("src/index.js"), &custom));
     }
 }
 

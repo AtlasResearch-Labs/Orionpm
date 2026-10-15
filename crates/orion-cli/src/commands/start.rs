@@ -249,10 +249,34 @@ pub async fn run(args: StartArgs) -> Result<()> {
             .and_then(parse_memory_string)
             .unwrap_or(0);
 
+        let effective_cwd = args
+            .cwd
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
+
+        let watch_paths = if args.watch_paths.is_empty() {
+            vec![effective_cwd.clone().unwrap_or_else(|| PathBuf::from("."))]
+        } else {
+            args.watch_paths
+                .iter()
+                .map(|p| {
+                    if p.is_relative() {
+                        if let Some(ref base) = effective_cwd {
+                            base.join(p)
+                        } else {
+                            p.clone()
+                        }
+                    } else {
+                        p.clone()
+                    }
+                })
+                .collect()
+        };
+
         let mut app_config = AppConfig {
             command,
             args: cmd_args,
-            cwd: args.cwd.map(PathBuf::from),
+            cwd: effective_cwd,
             name: Some(app_name.clone()),
             instances: args.instances.unwrap_or(1),
             mode: ExecutionMode::Fork,
@@ -266,11 +290,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
             max_restarts: 10,
             restart_window_secs: 60,
             watch: args.watch || !args.watch_paths.is_empty(),
-            watch_paths: if args.watch_paths.is_empty() {
-                vec![PathBuf::from(".")]
-            } else {
-                args.watch_paths.clone()
-            },
+            watch_paths,
             watch_ignore: vec![
                 "node_modules".into(),
                 "target".into(),
@@ -284,6 +304,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
             max_cpu_pct: 0.0,
             alerts: Default::default(),
             health: None,
+            smtp: None,
         };
 
         if args.health_http.is_some() || args.health_tcp.is_some() {

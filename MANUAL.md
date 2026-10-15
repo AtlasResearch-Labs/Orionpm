@@ -47,6 +47,7 @@ Orion is an industrial-grade process supervisor written in Rust. It serves as a 
 - **Dual Command Names**: Use either `orion` or the 3-letter shortcut **`opm`** (`opm list`, `opm stop`, `opm logs`).
 - **Single Native Binary**: Sub-second boot times, zero V8 engine startup penalty.
 - **Low Memory Overhead**: Baseline footprint of ~15 MB RSS compared to PM2's 80–150 MB.
+- **Zero Runtime Dependencies**: Completely standalone native Rust binaries for native executables, Python, Go, and TOML/Procfile configurations. (Node.js is only invoked if parsing dynamic JS `ecosystem.config.js` files).
 - **Drop-in PM2 & Procfile Compatibility**: Directly parses `ecosystem.config.js`, `ecosystem.json`, and standard 12-factor `Procfile` / `Procfile.dev` multi-service definitions.
 - **Embedded Logging & Metrics**: SQLite WAL-backed ring buffer log engine and OS-level CPU/memory sampling.
 - **100% Free & Open**: Zero paywalls, zero cloud upsells, zero telemetry.
@@ -89,7 +90,7 @@ orion --version
 
 Expected output:
 ```text
-orion 0.1.1
+orion 0.1.2
 ```
 
 ---
@@ -234,7 +235,7 @@ orion res all
 ---
 
 ### `orion reload` (Alias: `gracefulReload`)
-Performs a zero-downtime rolling reload. In cluster mode, workers are replaced one by one without dropping incoming connections.
+Performs a graceful rolling reload. Sends `SIGTERM` to allow in-flight connections to drain cleanly. For scaled/multi-instance deployments (`instances > 1`), workers are replaced sequentially one by one, ensuring zero-downtime service availability. For single-instance services, it executes a graceful stop-then-start sequence to prevent port binding collisions (`EADDRINUSE`).
 
 ```bash
 orion reload <TARGET>

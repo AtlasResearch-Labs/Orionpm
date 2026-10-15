@@ -438,26 +438,44 @@ async fn dispatch_request(
 
         Method::ProcessSendSignal => {
             if let Ok(SendSignalParams { target, signal }) = request.parse_params() {
-                let targets = registry.resolve_targets(&target);
-                if targets.is_empty() {
-                    send_not_found(req_id, &target, writer).await?;
-                } else {
-                    let mut delivered = 0usize;
-                    for name in targets {
-                        if let Some(pid) = registry.get_pid(&name) {
-                            if send_system_signal(pid, &signal) {
-                                delivered += 1;
-                                info!(name = %name, pid = pid, signal = %signal, "Delivered signal to process");
-                            }
-                        }
-                    }
-                    let resp = Response::ok(
+                if !is_valid_signal(&signal) {
+                    let resp = Response::err(
                         req_id,
-                        ResponseResult::Ack {
-                            message: format!("Delivered signal {} to {} process(es)", signal, delivered),
-                        },
+                        -32602,
+                        format!("Invalid signal '{}'. Expected standard signal (e.g. SIGTERM, SIGINT, SIGHUP, SIGKILL, 9, 15)", signal),
                     );
                     writer.lock().await.send(&resp).await?;
+                } else {
+                    let targets = registry.resolve_targets(&target);
+                    if targets.is_empty() {
+                        send_not_found(req_id, &target, writer).await?;
+                    } else {
+                        let mut delivered = 0usize;
+                        for name in targets {
+                            if let Some(pid) = registry.get_pid(&name) {
+                                if send_system_signal(pid, &signal) {
+                                    delivered += 1;
+                                    info!(name = %name, pid = pid, signal = %signal, "Delivered signal to process");
+                                }
+                            }
+                        }
+                        if delivered == 0 {
+                            let resp = Response::err(
+                                req_id,
+                                -32000,
+                                format!("Failed to deliver signal {} to '{}' (process is not running)", signal, target),
+                            );
+                            writer.lock().await.send(&resp).await?;
+                        } else {
+                            let resp = Response::ok(
+                                req_id,
+                                ResponseResult::Ack {
+                                    message: format!("Delivered signal {} to {} process(es)", signal, delivered),
+                                },
+                            );
+                            writer.lock().await.send(&resp).await?;
+                        }
+                    }
                 }
             } else {
                 send_invalid_params(req_id, writer).await?;
@@ -643,6 +661,18 @@ async fn send_invalid_params(req_id: u64, writer: Arc<Mutex<ResponseWriter>>) ->
     writer.lock().await.send(&resp).await
 }
 
+fn is_valid_signal(signal: &str) -> bool {
+    let clean = signal.trim().to_uppercase();
+    let name = clean.strip_prefix("SIG").unwrap_or(&clean);
+    matches!(
+        name,
+        "HUP" | "INT" | "QUIT" | "ILL" | "TRAP" | "ABRT" | "BUS" | "FPE" | "KILL"
+            | "USR1" | "SEGV" | "USR2" | "PIPE" | "ALRM" | "TERM" | "CHLD" | "CONT"
+            | "STOP" | "TSTP" | "TTIN" | "TTOU" | "URG" | "XCPU" | "XFSZ" | "VTALRM"
+            | "PROF" | "WINCH" | "IO" | "PWR" | "SYS"
+    ) || (name.parse::<i32>().map(|n| n > 0 && n <= 31).unwrap_or(false))
+}
+
 fn send_system_signal(pid: u32, signal: &str) -> bool {
     let clean_sig = signal.trim().to_uppercase();
     let sig_name = clean_sig.strip_prefix("SIG").unwrap_or(&clean_sig);
@@ -680,6 +710,29 @@ fn send_system_signal(pid: u32, signal: &str) -> bool {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_valid_signal() {
+        assert!(is_valid_signal("SIGTERM"));
+        assert!(is_valid_signal("sigterm"));
+        assert!(is_valid_signal("TERM"));
+        assert!(is_valid_signal("SIGINT"));
+        assert!(is_valid_signal("SIGHUP"));
+        assert!(is_valid_signal("SIGKILL"));
+        assert!(is_valid_signal("9"));
+        assert!(is_valid_signal("15"));
+        assert!(is_valid_signal("2"));
+
+        assert!(!is_valid_signal("SIGFOO"));
+        assert!(!is_valid_signal("0"));
+        assert!(!is_valid_signal("999"));
+        assert!(!is_valid_signal("RANDOM"));
     }
 }
 

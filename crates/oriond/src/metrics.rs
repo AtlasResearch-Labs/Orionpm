@@ -87,19 +87,29 @@ pub async fn run(registry: ProcessRegistry, logger: LogBus, shutdown: Cancellati
                                 });
                             }
 
-                            // Trigger process restart
-                            if let Some(cancel) = registry.supervisor_cancel(&name) {
-                                cancel.cancel();
-                            }
-                            if let Some(new_token) = registry.reset_cancel_token(&name) {
-                                crate::supervisor::spawn(
-                                    name.clone(),
-                                    config.clone(),
-                                    registry.clone(),
-                                    logger.clone(),
-                                    new_token,
-                                );
-                            }
+                            // Trigger process restart safely avoiding state race condition
+                            let reg = registry.clone();
+                            let log = logger.clone();
+                            let cfg = config.clone();
+                            let n = name.clone();
+                            tokio::spawn(async move {
+                                reg.set_state(&n, ProcessState::Restarting);
+                                reg.increment_restarts(&n);
+                                if let Some(cancel) = reg.supervisor_cancel(&n) {
+                                    cancel.cancel();
+                                }
+                                // Give old supervisor time to terminate child and cleanly exit
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                if let Some(new_token) = reg.reset_cancel_token(&n) {
+                                    crate::supervisor::spawn(
+                                        n,
+                                        cfg,
+                                        reg,
+                                        log,
+                                        new_token,
+                                    );
+                                }
+                            });
                         }
                     }
 

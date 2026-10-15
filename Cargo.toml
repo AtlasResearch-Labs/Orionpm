@@ -43,6 +43,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Error handling
 anyhow = "1"
 thiserror = "1"
+libc = "0.2"
 
 # Service installer (systemd / launchd / Windows SCM)
 service-manager = "0.7"

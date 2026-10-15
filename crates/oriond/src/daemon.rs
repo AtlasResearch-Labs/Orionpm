@@ -82,10 +82,15 @@ pub async fn run() -> Result<()> {
     }
 
     info!("Stopping all managed processes.");
+    for proc_info in registry.list() {
+        if let Some(cancel) = registry.supervisor_cancel(&proc_info.name) {
+            cancel.cancel();
+        }
+    }
     shutdown.cancel();
 
     // Give supervised processes a grace window before the process exits.
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
     info!("oriond exiting");
     Ok(())

@@ -43,7 +43,11 @@ impl ProcessHandle {
             cpu_pct: self.cpu_pct,
             memory_bytes: self.memory_bytes,
             mode: format!("{:?}", self.config.mode).to_lowercase(),
-            command: self.config.command.clone(),
+            command: if !self.config.args.is_empty() {
+                format!("{} {}", self.config.command, self.config.args.join(" "))
+            } else {
+                self.config.command.clone()
+            },
         }
     }
 }
@@ -152,6 +156,12 @@ impl ProcessRegistry {
     pub fn get(&self, name: &str) -> Option<ProcessInfo> {
         let inner = self.inner.read().expect("registry lock poisoned");
         inner.processes.get(name).map(|h| h.to_info())
+    }
+
+    /// Retrieve the current ProcessState of a named process.
+    pub fn get_state(&self, name: &str) -> Option<ProcessState> {
+        let inner = self.inner.read().expect("registry lock poisoned");
+        inner.processes.get(name).map(|h| h.state.clone())
     }
 
     /// Returns the cancellation token for a named process's supervisor task.
