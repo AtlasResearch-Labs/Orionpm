@@ -626,10 +626,10 @@
   <!-- Top Navigation -->
   <header>
     <a href="/" class="brand">
-      <div class="brand-icon">⚡</div>
+      <div class="brand-icon">O</div>
       <div class="brand-title">
         Orion
-        <span class="brand-tag">v0.1.4</span>
+        <span class="brand-tag">v0.1.5</span>
       </div>
     </a>
 
@@ -651,7 +651,7 @@
       <div class="metric-card">
         <div class="metric-header">
           <span>Processes Active</span>
-          <span>⚡</span>
+          <span style="font-size: 10px; color: var(--text-muted);">ACTIVE</span>
         </div>
         <div class="metric-value">
           <span id="activeCount">0</span>
@@ -745,7 +745,7 @@
     <div class="modal-card">
       <div class="modal-header">
         <h3 class="modal-title">Start New Process</h3>
-        <button class="btn btn-icon" onclick="closeStartModal()">✕</button>
+        <button class="btn btn-icon" onclick="closeStartModal()">X</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
@@ -785,7 +785,7 @@
     <div class="modal-card" style="max-width: 440px;">
       <div class="modal-header">
         <h3 class="modal-title">Scale Process</h3>
-        <button class="btn btn-icon" onclick="closeScaleModal()">✕</button>
+        <button class="btn btn-icon" onclick="closeScaleModal()">X</button>
       </div>
       <div class="modal-body">
         <p style="font-size: 0.85rem; color: var(--text-muted);" id="scaleTargetDesc">
@@ -815,7 +815,7 @@
             <option value="250">250 lines</option>
             <option value="500">500 lines</option>
           </select>
-          <button class="btn btn-icon" onclick="closeLogModal()">✕</button>
+          <button class="btn btn-icon" onclick="closeLogModal()">X</button>
         </div>
       </div>
       <div class="modal-body" style="padding: 1rem;">
@@ -862,7 +862,7 @@
       const toast = document.createElement('div');
       toast.className = 'toast';
       if (isError) toast.style.borderColor = 'var(--errored)';
-      toast.innerHTML = `<span>${isError ? '✕' : '✓'}</span> <span>${msg}</span>`;
+      toast.innerHTML = `<span>${isError ? 'X' : '+'}</span> <span>${msg}</span>`;
       container.appendChild(toast);
       setTimeout(() => toast.remove(), 3500);
     }
@@ -1004,15 +1004,15 @@
             <td>
               <div class="actions-cell">
                 ${isAlive ? `
-                  <button class="btn-action" title="Restart" onclick="processAction('${p.name}', 'restart')">↻</button>
-                  <button class="btn-action" title="Reload (Zero-downtime)" onclick="processAction('${p.name}', 'reload')">⚡</button>
-                  <button class="btn-action" title="Stop" onclick="processAction('${p.name}', 'stop')">⏹</button>
+                  <button class="btn-action" title="Restart" onclick="processAction('${p.name}', 'restart')">R</button>
+                  <button class="btn-action" title="Reload (Zero-downtime)" onclick="processAction('${p.name}', 'reload')">Z</button>
+                  <button class="btn-action" title="Stop" onclick="processAction('${p.name}', 'stop')">S</button>
                 ` : `
-                  <button class="btn-action" title="Start" onclick="processAction('${p.name}', 'restart')">▶</button>
+                  <button class="btn-action" title="Start" onclick="processAction('${p.name}', 'restart')">P</button>
                 `}
-                <button class="btn-action" title="Scale" onclick="openScaleModal('${p.name}')">⛶</button>
-                <button class="btn-action" title="View Logs" onclick="openLogModal('${p.name}')">📜</button>
-                <button class="btn-action btn-danger" title="Delete" onclick="deleteProcess('${p.name}')">✕</button>
+                <button class="btn-action" title="Scale" onclick="openScaleModal('${p.name}')">[+]</button>
+                <button class="btn-action" title="View Logs" onclick="openLogModal('${p.name}')">LOG</button>
+                <button class="btn-action btn-danger" title="Delete" onclick="deleteProcess('${p.name}')">DEL</button>
               </div>
             </td>
           </tr>
