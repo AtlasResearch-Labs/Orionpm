@@ -54,6 +54,16 @@ impl ProcessState {
             ProcessState::Starting | ProcessState::Running { .. } | ProcessState::Restarting
         )
     }
+
+    /// Returns true if the process has completely terminated (clean stop or errored).
+    pub fn is_stopped(&self) -> bool {
+        matches!(self, ProcessState::Stopped | ProcessState::Errored { .. })
+    }
+
+    /// Returns true if an underlying OS process is alive or currently in the middle of shutting down.
+    pub fn is_alive(&self) -> bool {
+        !self.is_stopped()
+    }
 }
 
 /// A snapshot of a managed process at a point in time.

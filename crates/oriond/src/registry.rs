@@ -255,9 +255,7 @@ impl ProcessRegistry {
             .processes
             .keys()
             .filter(|name| {
-                *name == target
-                    || name.starts_with(&prefix_dash)
-                    || name.starts_with(&prefix_hash)
+                *name == target || name.starts_with(&prefix_dash) || name.starts_with(&prefix_hash)
             })
             .cloned()
             .collect();
@@ -445,12 +443,16 @@ mod tests {
         registry.register("other".to_string(), dummy_config());
 
         // Target by base name
-        let (base, matches) = registry.resolve_scale_cluster("sc").expect("should resolve");
+        let (base, matches) = registry
+            .resolve_scale_cluster("sc")
+            .expect("should resolve");
         assert_eq!(base, "sc");
         assert_eq!(matches, vec!["sc", "sc-1", "sc-2"]);
 
         // Target by sibling instance name
-        let (base_sib, matches_sib) = registry.resolve_scale_cluster("sc-1").expect("should resolve");
+        let (base_sib, matches_sib) = registry
+            .resolve_scale_cluster("sc-1")
+            .expect("should resolve");
         assert_eq!(base_sib, "sc");
         assert_eq!(matches_sib, vec!["sc", "sc-1", "sc-2"]);
 
@@ -460,7 +462,9 @@ mod tests {
         assert_eq!(matches_id, vec!["sc", "sc-1", "sc-2"]);
 
         // Target non-cluster single process
-        let (base_other, matches_other) = registry.resolve_scale_cluster("other").expect("should resolve");
+        let (base_other, matches_other) = registry
+            .resolve_scale_cluster("other")
+            .expect("should resolve");
         assert_eq!(base_other, "other");
         assert_eq!(matches_other, vec!["other"]);
 
@@ -489,4 +493,3 @@ mod tests {
         assert_eq!(all, vec!["api", "web", "web-1", "web-2"]);
     }
 }
-

@@ -1,7 +1,7 @@
+use super::client;
 use anyhow::{bail, Result};
 use clap::Args;
 use orion_core::protocol::{Method, Params, ResponseResult, ScaleParams};
-use super::client;
 
 use crate::commands::list::{self, ListArgs};
 

@@ -53,7 +53,15 @@ async fn run_supervisor_loop(
         let app_name = name.clone();
         let app_cwd = config.cwd.clone();
         tokio::spawn(async move {
-            run_file_watcher(app_name, app_cwd, watch_paths, watch_ignore, tx, watcher_cancel).await;
+            run_file_watcher(
+                app_name,
+                app_cwd,
+                watch_paths,
+                watch_ignore,
+                tx,
+                watcher_cancel,
+            )
+            .await;
         });
         Some(rx)
     } else {
@@ -157,7 +165,10 @@ async fn run_supervisor_loop(
                         &name,
                         ProcessState::Errored {
                             exit_code: None,
-                            message: format!("Max restarts ({}) reached on spawn failure", config.max_restarts),
+                            message: format!(
+                                "Max restarts ({}) reached on spawn failure",
+                                config.max_restarts
+                            ),
                         },
                     );
                     break;
@@ -441,7 +452,8 @@ async fn run_supervisor_loop(
         }
 
         let exit_code = exit_status.and_then(|s| s.code());
-        let success = !health_failure_triggered && exit_status.map(|s| s.success()).unwrap_or(false);
+        let success =
+            !health_failure_triggered && exit_status.map(|s| s.success()).unwrap_or(false);
 
         info!(name = %name, exit_code = ?exit_code, success = success, "Process exited");
 
@@ -649,22 +661,15 @@ async fn run_file_watcher(
         }
     };
 
-    let base_dir = app_cwd.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let base_dir =
+        app_cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let watch_targets: Vec<PathBuf> = if paths.is_empty() {
         vec![base_dir]
     } else {
         paths
             .into_iter()
-            .map(|p| {
-                if p.is_relative() {
-                    base_dir.join(p)
-                } else {
-                    p
-                }
-            })
+            .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
             .collect()
     };
 
@@ -759,11 +764,7 @@ pub fn is_ignored(path: &Path, ignore_patterns: &[String]) -> bool {
 }
 
 #[cfg(unix)]
-async fn graceful_terminate_child(
-    child: &mut tokio::process::Child,
-    pid: u32,
-    timeout_secs: u64,
-) {
+async fn graceful_terminate_child(child: &mut tokio::process::Child, pid: u32, timeout_secs: u64) {
     if pid == 0 {
         let _ = child.kill().await;
         return;
@@ -779,7 +780,10 @@ async fn graceful_terminate_child(
     let wait_res = tokio::time::timeout(grace_duration, child.wait()).await;
 
     if wait_res.is_err() {
-        warn!(pid = pid, "Process did not exit after SIGTERM grace period; escalating to SIGKILL");
+        warn!(
+            pid = pid,
+            "Process did not exit after SIGTERM grace period; escalating to SIGKILL"
+        );
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
             libc::kill(pid as i32, libc::SIGKILL);
@@ -790,11 +794,7 @@ async fn graceful_terminate_child(
 }
 
 #[cfg(windows)]
-async fn graceful_terminate_child(
-    child: &mut tokio::process::Child,
-    pid: u32,
-    timeout_secs: u64,
-) {
+async fn graceful_terminate_child(child: &mut tokio::process::Child, pid: u32, timeout_secs: u64) {
     if pid == 0 {
         let _ = child.kill().await;
         return;
@@ -810,7 +810,10 @@ async fn graceful_terminate_child(
     let wait_res = tokio::time::timeout(grace_duration, child.wait()).await;
 
     if wait_res.is_err() {
-        warn!(pid = pid, "Process did not exit gracefully; escalating to forceful termination");
+        warn!(
+            pid = pid,
+            "Process did not exit gracefully; escalating to forceful termination"
+        );
         let _ = tokio::process::Command::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
@@ -873,7 +876,9 @@ async fn send_crash_email(
     let builder_res = if smtp.tls {
         AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host)
     } else {
-        Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host))
+        Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+            &smtp.host,
+        ))
     };
 
     match builder_res {
@@ -981,12 +986,18 @@ mod tests {
         assert!(!is_ignored(Path::new("targets.js"), &empty_custom));
         assert!(!is_ignored(Path::new("src/targets.js"), &empty_custom));
         assert!(!is_ignored(Path::new("retarget.ts"), &empty_custom));
-        assert!(!is_ignored(Path::new(".github/workflows/ci.yml"), &empty_custom));
+        assert!(!is_ignored(
+            Path::new(".github/workflows/ci.yml"),
+            &empty_custom
+        ));
 
         // Must ignore actual directories and special files
         assert!(is_ignored(Path::new("target/debug/build"), &empty_custom));
         assert!(is_ignored(Path::new(".git/HEAD"), &empty_custom));
-        assert!(is_ignored(Path::new("node_modules/express/index.js"), &empty_custom));
+        assert!(is_ignored(
+            Path::new("node_modules/express/index.js"),
+            &empty_custom
+        ));
         assert!(is_ignored(Path::new(".orion/orion.db"), &empty_custom));
         assert!(is_ignored(Path::new("app.log"), &empty_custom));
         assert!(is_ignored(Path::new("index.js~"), &empty_custom));
@@ -1000,4 +1011,3 @@ mod tests {
         assert!(!is_ignored(Path::new("src/index.js"), &custom));
     }
 }
-

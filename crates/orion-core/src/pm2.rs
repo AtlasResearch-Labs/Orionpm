@@ -38,52 +38,263 @@ fn read_as_json(path: &Path) -> Result<Value> {
         return Ok(val);
     }
 
-    // For .js / .cjs / .mjs files, try executing node if available
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read PM2 file: {}", path.display()))?;
+
+    // 1. Pure native Rust parser: zero runtime dependencies, no Node.js required
+    if let Some(val) = parse_js_ecosystem_native(&content) {
+        return Ok(val);
+    }
+
+    // 2. Fallback: if dynamic JS code (e.g. function calls, runtime eval) is used, execute node if installed
     let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let node_script = format!(
-        r#"try {{ const conf = require({}); console.log(JSON.stringify(conf)); }} catch(e) {{ console.error(e.message); process.exit(1); }}"#,
-        serde_json::to_string(&abs_path.to_string_lossy())?
-    );
+    if let Ok(path_json) = serde_json::to_string(&abs_path.to_string_lossy()) {
+        let node_script = format!(
+            r#"try {{ const conf = require({}); console.log(JSON.stringify(conf)); }} catch(e) {{ console.error(e.message); process.exit(1); }}"#,
+            path_json
+        );
 
-    let output = Command::new("node").arg("-e").arg(&node_script).output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            let stdout_str = String::from_utf8_lossy(&out.stdout);
-            if let Ok(val) = serde_json::from_str::<Value>(stdout_str.trim()) {
-                return Ok(val);
+        if let Ok(out) = Command::new("node").arg("-e").arg(&node_script).output() {
+            if out.status.success() {
+                let stdout_str = String::from_utf8_lossy(&out.stdout);
+                if let Ok(val) = serde_json::from_str::<Value>(stdout_str.trim()) {
+                    return Ok(val);
+                }
             }
         }
     }
 
-    // Fallback: read raw file and try extracting JSON-like apps array
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read PM2 file: {}", path.display()))?;
-
-    fallback_extract_apps(&content).ok_or_else(|| {
-        anyhow!(
-            "Failed to parse PM2 file '{}'. Ensure Node.js is installed or convert to JSON.",
-            path.display()
-        )
-    })
+    Err(anyhow!(
+        "Failed to parse PM2 file '{}'. Ensure it defines a valid 'apps' array.",
+        path.display()
+    ))
 }
 
-fn fallback_extract_apps(content: &str) -> Option<Value> {
-    // Look for apps: [ ... ]
-    let apps_marker = "apps";
-    if let Some(pos) = content.find(apps_marker) {
-        if let Some(bracket_start) = content[pos..].find('[') {
+fn strip_js_comments(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_backtick = false;
+
+    while i < len {
+        let c = chars[i];
+        let next = if i + 1 < len {
+            Some(chars[i + 1])
+        } else {
+            None
+        };
+
+        // Handle string literals
+        if !in_single_quote && !in_double_quote && !in_backtick {
+            if c == '/' && next == Some('/') {
+                // Line comment: skip until newline
+                i += 2;
+                while i < len && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            } else if c == '/' && next == Some('*') {
+                // Block comment: skip until */
+                i += 2;
+                while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '/') {
+                    i += 1;
+                }
+                i += 2; // skip */
+                continue;
+            }
+        }
+
+        if c == '\'' && !in_double_quote && !in_backtick && (i == 0 || chars[i - 1] != '\\') {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote && !in_backtick && (i == 0 || chars[i - 1] != '\\') {
+            in_double_quote = !in_double_quote;
+        } else if c == '`'
+            && !in_single_quote
+            && !in_double_quote
+            && (i == 0 || chars[i - 1] != '\\')
+        {
+            in_backtick = !in_backtick;
+        }
+
+        result.push(c);
+        i += 1;
+    }
+
+    result
+}
+
+fn normalize_js_object_literal(input: &str) -> String {
+    let mut result = String::with_capacity(input.len() + 64);
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while i < len {
+        let c = chars[i];
+
+        if in_single_quote {
+            if c == '\'' && (i == 0 || chars[i - 1] != '\\') {
+                in_single_quote = false;
+                result.push('"');
+            } else if c == '"' && (i == 0 || chars[i - 1] != '\\') {
+                result.push('\\');
+                result.push('"');
+            } else {
+                result.push(c);
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_double_quote {
+            if c == '"' && (i == 0 || chars[i - 1] != '\\') {
+                in_double_quote = false;
+            }
+            result.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == '\'' {
+            in_single_quote = true;
+            result.push('"');
+            i += 1;
+            continue;
+        }
+
+        if c == '"' {
+            in_double_quote = true;
+            result.push('"');
+            i += 1;
+            continue;
+        }
+
+        if c == '`' {
+            // Treat backtick as double quote
+            result.push('"');
+            i += 1;
+            while i < len && chars[i] != '`' {
+                if chars[i] == '"' {
+                    result.push('\\');
+                }
+                result.push(chars[i]);
+                i += 1;
+            }
+            result.push('"');
+            if i < len {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Check for unquoted identifier key before ':'
+        if (c.is_ascii_alphabetic() || c == '_' || c == '$')
+            && (i == 0
+                || (!chars[i - 1].is_ascii_alphanumeric()
+                    && chars[i - 1] != '_'
+                    && chars[i - 1] != '$'))
+        {
+            let start = i;
+            while i < len
+                && (chars[i].is_ascii_alphanumeric()
+                    || chars[i] == '_'
+                    || chars[i] == '$'
+                    || chars[i] == '-')
+            {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+
+            // Look ahead past whitespace to see if followed by ':'
+            let mut peek = i;
+            while peek < len && chars[peek].is_whitespace() {
+                peek += 1;
+            }
+
+            if peek < len && chars[peek] == ':' && !(peek + 1 < len && chars[peek + 1] == ':') {
+                // It's a key! Wrap in quotes
+                result.push('"');
+                result.push_str(&ident);
+                result.push('"');
+                continue;
+            } else {
+                // Normal identifier (e.g. true, false, null)
+                result.push_str(&ident);
+                continue;
+            }
+        }
+
+        // Check for trailing comma before } or ]
+        if c == ',' {
+            let mut peek = i + 1;
+            while peek < len && chars[peek].is_whitespace() {
+                peek += 1;
+            }
+            if peek < len && (chars[peek] == '}' || chars[peek] == ']') {
+                // Skip trailing comma
+                i += 1;
+                continue;
+            }
+        }
+
+        result.push(c);
+        i += 1;
+    }
+
+    result
+}
+
+fn parse_js_ecosystem_native(content: &str) -> Option<Value> {
+    let clean = strip_js_comments(content);
+
+    // Look for `apps:` array
+    if let Some(pos) = clean.find("apps") {
+        if let Some(bracket_start) = clean[pos..].find('[') {
             let start = pos + bracket_start;
-            if let Some(bracket_end) = content[start..].rfind(']') {
-                let end = start + bracket_end + 1;
-                let slice = &content[start..end];
-                // Try parsing directly as JSON
-                if let Ok(v) = serde_json::from_str::<Value>(slice) {
+            // Find matching closing bracket
+            let mut depth = 0;
+            let mut end = None;
+            for (idx, ch) in clean[start..].char_indices() {
+                if ch == '[' {
+                    depth += 1;
+                } else if ch == ']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + idx + 1);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(end_idx) = end {
+                let slice = &clean[start..end_idx];
+                let normalized = normalize_js_object_literal(slice);
+                if let Ok(v) = serde_json::from_str::<Value>(&normalized) {
                     return Some(serde_json::json!({ "apps": v }));
                 }
             }
         }
     }
+
+    // Try finding root object { ... }
+    if let Some(start) = clean.find('{') {
+        if let Some(end) = clean.rfind('}') {
+            let slice = &clean[start..=end];
+            let normalized = normalize_js_object_literal(slice);
+            if let Ok(v) = serde_json::from_str::<Value>(&normalized) {
+                if v.get("apps").is_some() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -469,5 +680,38 @@ mod tests {
         assert!(toml_str.contains("[app.worker]"));
         assert!(toml_str.contains(r#"command = "python""#));
         assert!(toml_str.contains("max_memory_mb = 256"));
+    }
+
+    #[test]
+    fn test_parse_js_ecosystem_native() {
+        let js_raw = r#"
+            // PM2 Ecosystem file with comments
+            module.exports = {
+                apps: [
+                    {
+                        name: 'my-service',
+                        script: './app.js',
+                        instances: 2,
+                        exec_mode: 'cluster',
+                        watch: false,
+                        env: {
+                            NODE_ENV: 'production',
+                            PORT: 3000,
+                        },
+                    }
+                ],
+            };
+        "#;
+
+        let val = parse_js_ecosystem_native(js_raw).expect("native parsing failed");
+        let apps = parse_apps_from_json(&val, Path::new(".")).unwrap();
+        assert_eq!(apps.len(), 1);
+
+        let app = apps.get("my-service").expect("app missing");
+        assert_eq!(app.command, "node");
+        assert_eq!(app.args, vec!["./app.js"]);
+        assert_eq!(app.instances, 2);
+        assert_eq!(app.mode, ExecutionMode::Cluster);
+        assert_eq!(app.env.get("PORT"), Some(&"3000".to_string()));
     }
 }

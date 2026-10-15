@@ -35,11 +35,7 @@ pub async fn run(args: LogsArgs) -> Result<()> {
     let follow = !args.nostream;
 
     if !args.raw {
-        let stream_hint = if follow {
-            ", Ctrl+C to exit"
-        } else {
-            ""
-        };
+        let stream_hint = if follow { ", Ctrl+C to exit" } else { "" };
         println!(
             "\x1b[1;36m[TAILING]\x1b[0m Tailing last {} lines for [{}] (change with --lines <N>{})",
             args.lines, args.target, stream_hint

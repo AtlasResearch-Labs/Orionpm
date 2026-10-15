@@ -146,12 +146,19 @@ impl Storage {
         }
 
         all_lines.sort_by_key(|(id, _, _)| *id);
-        Ok(all_lines.into_iter().map(|(_, name, line)| (name, line)).collect())
+        Ok(all_lines
+            .into_iter()
+            .map(|(_, name, line)| (name, line))
+            .collect())
     }
 
     /// Retrieve the most recent `limit` log lines, returning `(process_name, LogLine)` tuples.
     /// If `name` is "all" or empty, retrieves up to `limit` lines per process, sorted chronologically.
-    pub fn get_logs_with_process(&self, name: &str, limit: usize) -> Result<Vec<(String, LogLine)>> {
+    pub fn get_logs_with_process(
+        &self,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, LogLine)>> {
         let conn = self.conn.lock().expect("storage lock poisoned");
         if name == "all" || name.is_empty() {
             let distinct_names: Vec<String> = {

@@ -19,7 +19,9 @@ pub fn parse_procfile_str(
 ) -> Result<Vec<(String, AppConfig)>> {
     let cwd_val = match base_dir {
         Some(b) if !b.as_os_str().is_empty() => Some(b.to_path_buf()),
-        _ => std::env::current_dir().ok().or_else(|| Some(PathBuf::from("."))),
+        _ => std::env::current_dir()
+            .ok()
+            .or_else(|| Some(PathBuf::from("."))),
     };
     let mut apps = Vec::new();
 

@@ -1,7 +1,7 @@
+use super::client;
 use anyhow::{bail, Result};
 use clap::Args;
 use orion_core::protocol::{Method, Params, ResponseResult, SendSignalParams};
-use super::client;
 
 #[derive(Args)]
 pub struct SendSignalArgs {

@@ -109,14 +109,14 @@ async fn dispatch_request(
                         }
                     }
 
-                    // Wait for all targets to gracefully terminate and release resources (up to 5s).
+                    // Wait for all targets to gracefully terminate and release resources (up to 7s, allowing SIGKILL if SIGTERM ignored).
                     // This matches PM2 behavior and prevents race conditions in deploy scripts (`stop && deploy`).
                     let start_wait = tokio::time::Instant::now();
-                    while start_wait.elapsed() < tokio::time::Duration::from_secs(5) {
-                        let any_active = targets.iter().any(|t| {
-                            registry.get(t).map(|p| p.state.is_active()).unwrap_or(false)
-                        });
-                        if !any_active {
+                    while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                        let any_alive = targets
+                            .iter()
+                            .any(|t| registry.get_state(t).map(|s| s.is_alive()).unwrap_or(false));
+                        if !any_alive {
                             break;
                         }
                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -150,8 +150,18 @@ async fn dispatch_request(
                             if let Some(cancel) = registry.supervisor_cancel(target_name) {
                                 cancel.cancel();
                             }
-                            // Pause to allow socket release
-                            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                            // Wait for old process to fully exit before spawning new one
+                            let start_wait = tokio::time::Instant::now();
+                            while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                                let still_alive = registry
+                                    .get_state(target_name)
+                                    .map(|s| s.is_alive())
+                                    .unwrap_or(false);
+                                if !still_alive {
+                                    break;
+                                }
+                                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                            }
                             if let Some(new_token) = registry.reset_cancel_token(target_name) {
                                 crate::supervisor::spawn(
                                     target_name.clone(),
@@ -200,18 +210,17 @@ async fn dispatch_request(
                                 cancel.cancel();
                             }
 
-                            // 2. Wait up to 2 seconds for previous process to release ports and exit.
-                            let mut elapsed = 0u64;
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                elapsed += 100;
-                                let still_running = registry
-                                    .get(target_name)
-                                    .map(|p| p.state.is_active())
+                            // 2. Wait up to 7 seconds for previous process to release ports and exit cleanly.
+                            let start_wait = tokio::time::Instant::now();
+                            while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                                let still_alive = registry
+                                    .get_state(target_name)
+                                    .map(|s| s.is_alive())
                                     .unwrap_or(false);
-                                if !still_running || elapsed >= 2000 {
+                                if !still_alive {
                                     break;
                                 }
+                                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                             }
 
                             // 3. Reset cancel token and spawn fresh supervisor.
@@ -268,6 +277,21 @@ async fn dispatch_request(
                         if let Some(cancel) = registry.supervisor_cancel(target_name) {
                             cancel.cancel();
                         }
+                    }
+
+                    // Await full termination before removing from registry and storage (up to 7s)
+                    let start_wait = tokio::time::Instant::now();
+                    while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                        let any_alive = targets
+                            .iter()
+                            .any(|t| registry.get_state(t).map(|s| s.is_alive()).unwrap_or(false));
+                        if !any_alive {
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    }
+
+                    for target_name in &targets {
                         registry.remove(target_name);
                         let _ = storage.remove_saved_process(target_name);
                         let _ = storage.flush_logs(target_name);
@@ -412,7 +436,11 @@ async fn dispatch_request(
                                 message: if targets.len() == 1 {
                                     format!("Flushed {} log lines for '{}'", total, targets[0])
                                 } else {
-                                    format!("Flushed {} log lines across {} processes", total, targets.len())
+                                    format!(
+                                        "Flushed {} log lines across {} processes",
+                                        total,
+                                        targets.len()
+                                    )
                                 },
                             },
                         );
@@ -477,14 +505,20 @@ async fn dispatch_request(
                             let resp = Response::err(
                                 req_id,
                                 -32000,
-                                format!("Failed to deliver signal {} to '{}' (process is not running)", signal, target),
+                                format!(
+                                    "Failed to deliver signal {} to '{}' (process is not running)",
+                                    signal, target
+                                ),
                             );
                             writer.lock().await.send(&resp).await?;
                         } else {
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("Delivered signal {} to {} process(es)", signal, delivered),
+                                    message: format!(
+                                        "Delivered signal {} to {} process(es)",
+                                        signal, delivered
+                                    ),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -522,8 +556,11 @@ async fn dispatch_request(
                             while spawned < needed {
                                 let instance_name = format!("{}-{}", base_name, idx);
                                 if !registry.contains(&instance_name) {
-                                    let _ = registry.register(instance_name.clone(), config.clone());
-                                    let cancel_token = registry.supervisor_cancel(&instance_name).unwrap_or_default();
+                                    let _ =
+                                        registry.register(instance_name.clone(), config.clone());
+                                    let cancel_token = registry
+                                        .supervisor_cancel(&instance_name)
+                                        .unwrap_or_default();
                                     crate::supervisor::spawn(
                                         instance_name,
                                         config.clone(),
@@ -538,7 +575,10 @@ async fn dispatch_request(
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("Scaled '{}' from {} to {} instances", base_name, current_count, target_count),
+                                    message: format!(
+                                        "Scaled '{}' from {} to {} instances",
+                                        base_name, current_count, target_count
+                                    ),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -549,13 +589,18 @@ async fn dispatch_request(
                                 if let Some(cancel) = registry.supervisor_cancel(proc_name) {
                                     cancel.cancel();
                                 }
-                                // Give process time to terminate cleanly before removing from registry
-                                let mut elapsed = 0u64;
-                                while elapsed < 2000 {
-                                    let is_active = registry.get(proc_name).map(|p| p.state.is_active()).unwrap_or(false);
-                                    if !is_active { break; }
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                                    elapsed += 50;
+                                // Give process time to terminate cleanly before removing from registry (up to 7s)
+                                let start_wait = tokio::time::Instant::now();
+                                while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                                    let still_alive = registry
+                                        .get_state(proc_name)
+                                        .map(|s| s.is_alive())
+                                        .unwrap_or(false);
+                                    if !still_alive {
+                                        break;
+                                    }
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(50))
+                                        .await;
                                 }
                                 registry.remove(proc_name);
                                 let _ = storage.remove_saved_process(proc_name);
@@ -564,7 +609,10 @@ async fn dispatch_request(
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("Scaled '{}' from {} down to {} instances", base_name, current_count, target_count),
+                                    message: format!(
+                                        "Scaled '{}' from {} down to {} instances",
+                                        base_name, current_count, target_count
+                                    ),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -572,7 +620,10 @@ async fn dispatch_request(
                             let resp = Response::ok(
                                 req_id,
                                 ResponseResult::Ack {
-                                    message: format!("'{}' is already at {} instances", base_name, target_count),
+                                    message: format!(
+                                        "'{}' is already at {} instances",
+                                        base_name, target_count
+                                    ),
                                 },
                             );
                             writer.lock().await.send(&resp).await?;
@@ -688,11 +739,40 @@ fn is_valid_signal(signal: &str) -> bool {
     let name = clean.strip_prefix("SIG").unwrap_or(&clean);
     matches!(
         name,
-        "HUP" | "INT" | "QUIT" | "ILL" | "TRAP" | "ABRT" | "BUS" | "FPE" | "KILL"
-            | "USR1" | "SEGV" | "USR2" | "PIPE" | "ALRM" | "TERM" | "CHLD" | "CONT"
-            | "STOP" | "TSTP" | "TTIN" | "TTOU" | "URG" | "XCPU" | "XFSZ" | "VTALRM"
-            | "PROF" | "WINCH" | "IO" | "PWR" | "SYS"
-    ) || (name.parse::<i32>().map(|n| n > 0 && n <= 31).unwrap_or(false))
+        "HUP"
+            | "INT"
+            | "QUIT"
+            | "ILL"
+            | "TRAP"
+            | "ABRT"
+            | "BUS"
+            | "FPE"
+            | "KILL"
+            | "USR1"
+            | "SEGV"
+            | "USR2"
+            | "PIPE"
+            | "ALRM"
+            | "TERM"
+            | "CHLD"
+            | "CONT"
+            | "STOP"
+            | "TSTP"
+            | "TTIN"
+            | "TTOU"
+            | "URG"
+            | "XCPU"
+            | "XFSZ"
+            | "VTALRM"
+            | "PROF"
+            | "WINCH"
+            | "IO"
+            | "PWR"
+            | "SYS"
+    ) || (name
+        .parse::<i32>()
+        .map(|n| n > 0 && n <= 31)
+        .unwrap_or(false))
 }
 
 fn send_system_signal(pid: u32, signal: &str) -> bool {
@@ -757,4 +837,3 @@ mod tests {
         assert!(!is_valid_signal("RANDOM"));
     }
 }
-
