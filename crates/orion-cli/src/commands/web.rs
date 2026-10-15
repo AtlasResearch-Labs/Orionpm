@@ -80,9 +80,9 @@ pub async fn run(args: WebArgs) -> Result<()> {
     println!(" \\___/|_| \\_\\___\\___/|_| \\_|\n");
     println!(" Orion Web Dashboard v{}", env!("CARGO_PKG_VERSION"));
     println!(" Built by Atlas Research Labs. Built for the World.\n");
-    println!(" ⚡ Dashboard:  http://{}", addr);
-    println!(" 📡 Realtime:   Server-Sent Events (SSE)");
-    println!(" 🔒 Daemon:     Connected to oriond\n");
+    println!("  Dashboard:  http://{}", addr);
+    println!("  Realtime:   Server-Sent Events (SSE)");
+    println!("  Daemon:     Connected to oriond\n");
     println!(" Press Ctrl+C to stop.\n");
 
     if !args.no_open {
