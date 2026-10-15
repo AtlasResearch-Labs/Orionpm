@@ -90,7 +90,7 @@ orion --version
 
 Expected output:
 ```text
-orion 0.1.2
+orion 0.1.3
 ```
 
 ---
