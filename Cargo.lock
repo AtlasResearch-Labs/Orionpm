@@ -1104,7 +1104,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orion-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "orion-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "serde",
@@ -1136,10 +1136,11 @@ dependencies = [
 
 [[package]]
 name = "orion-ipc"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "interprocess",
+ "libc",
  "orion-core",
  "serde",
  "serde_json",
@@ -1151,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "oriond"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "interprocess",

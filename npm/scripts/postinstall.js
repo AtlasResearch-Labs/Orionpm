@@ -73,6 +73,20 @@ function install() {
     }
   }
 
+  // Ensure executable permissions on all existing native binaries for this platform
+  if (process.platform !== 'win32') {
+    for (const b of target.binaries) {
+      const p = path.join(nativeDir, b);
+      if (fs.existsSync(p)) {
+        try {
+          fs.chmodSync(p, 0o755);
+        } catch {
+          // ignore permission errors if unprivileged
+        }
+      }
+    }
+  }
+
   // Check if binaries are already present
   const allExist = target.binaries.every((b) => fs.existsSync(path.join(nativeDir, b)));
   if (allExist) {

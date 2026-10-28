@@ -198,6 +198,17 @@ impl ProcessRegistry {
         inner.processes.get(name).map(|h| h.config.clone())
     }
 
+    /// Update the config of a named process. Returns false if not found.
+    pub fn update_config(&self, name: &str, config: AppConfig) -> bool {
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if let Some(handle) = inner.processes.get_mut(name) {
+            handle.config = config;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Reset the cancellation token for a process, returning the new token.
     pub fn reset_cancel_token(&self, name: &str) -> Option<tokio_util::sync::CancellationToken> {
         let mut inner = self.inner.write().expect("registry lock poisoned");

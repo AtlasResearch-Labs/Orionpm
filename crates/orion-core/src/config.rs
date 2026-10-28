@@ -185,6 +185,15 @@ pub struct HealthConfig {
     /// HTTP URL to check periodically (e.g. "http://127.0.0.1:3000/healthz").
     pub http: Option<String>,
 
+    /// Optional HTTP headers to include in probe requests (e.g. Authorization).
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+
+    /// Optional list of HTTP status codes considered healthy (e.g. [200, 204]).
+    /// If empty or None, any 2xx/3xx status is considered healthy.
+    #[serde(default)]
+    pub expected_status: Option<Vec<u16>>,
+
     /// TCP host:port to check periodically (e.g. "127.0.0.1:5432").
     pub tcp: Option<String>,
 
@@ -384,5 +393,31 @@ mod tests {
         assert_eq!(health.interval_secs, 5);
         assert_eq!(health.timeout_secs, 2);
         assert_eq!(health.max_failures, 5);
+    }
+
+    #[test]
+    fn parse_health_headers_and_status() {
+        let raw = r#"
+            [app.auth_api]
+            command = "node index.js"
+
+            [app.auth_api.health]
+            http = "http://127.0.0.1:2333/version"
+            interval_secs = 10
+            timeout_secs = 3
+            max_failures = 3
+            expected_status = [200, 204]
+
+            [app.auth_api.health.headers]
+            Authorization = "secret123"
+            X-Custom-Header = "test"
+        "#;
+        let config = OrionConfig::from_str(raw).expect("parse failed");
+        let app = config.apps.get("auth_api").expect("app not found");
+        let health = app.health.as_ref().expect("health config missing");
+        assert_eq!(health.expected_status, Some(vec![200, 204]));
+        let headers = health.headers.as_ref().expect("headers missing");
+        assert_eq!(headers.get("Authorization"), Some(&"secret123".to_string()));
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"test".to_string()));
     }
 }

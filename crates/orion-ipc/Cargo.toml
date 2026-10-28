@@ -17,3 +17,4 @@ interprocess = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+libc = { workspace = true }

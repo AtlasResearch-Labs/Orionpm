@@ -71,6 +71,7 @@ async fn dispatch_request(
                     if let Some(cancel) = registry.supervisor_cancel(&name) {
                         cancel.cancel();
                     }
+                    registry.update_config(&name, config.clone());
                     registry.reset_cancel_token(&name).unwrap_or_default()
                 } else {
                     let _ = registry.register(name.clone(), config.clone());

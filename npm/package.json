@@ -1,8 +1,11 @@
 {
   "name": "orionpm",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Industrial-grade Rust process manager alternative to PM2. Built by Atlas Research Labs. Built for the World.",
   "main": "index.js",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
   "bin": {
     "orion": "bin/orion.js",
     "opm": "bin/opm.js",
@@ -31,6 +34,7 @@
   "files": [
     "bin/",
     "lib/",
+    "scripts/",
     "index.js",
     "README.md"
   ]

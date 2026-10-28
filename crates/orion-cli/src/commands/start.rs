@@ -109,6 +109,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
                     interval_secs: args.health_interval.unwrap_or(10),
                     timeout_secs: 3,
                     max_failures: args.health_max_failures.unwrap_or(3),
+                    ..Default::default()
                 });
             }
 
@@ -160,6 +161,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
                     interval_secs: args.health_interval.unwrap_or(10),
                     timeout_secs: 3,
                     max_failures: args.health_max_failures.unwrap_or(3),
+                    ..Default::default()
                 });
             }
 
@@ -211,6 +213,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
                     interval_secs: args.health_interval.unwrap_or(10),
                     timeout_secs: 3,
                     max_failures: args.health_max_failures.unwrap_or(3),
+                    ..Default::default()
                 });
             }
 
@@ -314,6 +317,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
                 interval_secs: args.health_interval.unwrap_or(10),
                 timeout_secs: 3,
                 max_failures: args.health_max_failures.unwrap_or(3),
+                ..Default::default()
             });
         }
 

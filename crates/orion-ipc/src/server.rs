@@ -43,7 +43,7 @@ where
 {
     #[cfg(not(windows))]
     {
-        let socket_path = std::env::temp_dir().join(crate::SOCKET_NAME);
+        let socket_path = crate::get_socket_path();
         if socket_path.exists() {
             // Check if another live daemon is currently answering on this socket.
             let is_alive = if let Ok(socket_name) = get_socket_name() {

@@ -944,8 +944,20 @@ async fn run_health_probe(
         }
 
         let is_healthy = if let Some(ref http_url) = health.http {
-            match client.get(http_url).send().await {
-                Ok(resp) => resp.status().is_success() || resp.status().is_redirection(),
+            let mut req = client.get(http_url);
+            if let Some(ref headers) = health.headers {
+                for (k, v) in headers {
+                    req = req.header(k, v);
+                }
+            }
+            match req.send().await {
+                Ok(resp) => {
+                    if let Some(ref expected) = health.expected_status {
+                        expected.contains(&resp.status().as_u16())
+                    } else {
+                        resp.status().is_success() || resp.status().is_redirection()
+                    }
+                }
                 Err(_) => false,
             }
         } else if let Some(ref tcp_addr) = health.tcp {
