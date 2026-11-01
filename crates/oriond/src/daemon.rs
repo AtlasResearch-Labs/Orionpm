@@ -94,6 +94,11 @@ pub async fn run() -> Result<()> {
 
     info!("oriond ready");
 
+    // ── Phase 3: Systemd Type=notify support ──────────────────────────────────
+    // Notify systemd that initialization is complete and daemon is fully ready.
+    #[cfg(target_os = "linux")]
+    notify_systemd("READY=1");
+
     // Block until SIGTERM or SIGINT or daemon kill request.
     tokio::select! {
         _ = shutdown_signal() => {
@@ -103,6 +108,9 @@ pub async fn run() -> Result<()> {
             info!("Daemon shutdown cancellation triggered.");
         }
     }
+
+    #[cfg(target_os = "linux")]
+    notify_systemd("STOPPING=1");
 
     info!("Stopping all managed processes.");
     for proc_info in registry.list() {
@@ -143,6 +151,18 @@ async fn shutdown_signal() {
                 // Wait indefinitely; shutdown will occur via IPC DaemonKill.
                 std::future::pending::<()>().await;
             }
+        }
+    }
+}
+
+/// Sends readiness or stopping states to systemd via $NOTIFY_SOCKET datagram socket.
+#[cfg(target_os = "linux")]
+fn notify_systemd(state: &str) {
+    if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        if let Ok(socket) = UnixDatagram::unbound() {
+            let msg = format!("{}\n", state);
+            let _ = socket.send_to(msg.as_bytes(), socket_path);
         }
     }
 }

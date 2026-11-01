@@ -84,6 +84,9 @@ enum Command {
     /// Control the oriond daemon process.
     Daemon(commands::daemon::DaemonArgs),
 
+    /// Stop oriond daemon and all managed processes (PM2 kill parity).
+    Kill,
+
     /// Import and convert PM2 ecosystem configurations.
     Import(commands::import::ImportArgs),
 
@@ -136,6 +139,12 @@ async fn main() -> Result<()> {
         Command::Startup(args) => commands::startup::run(args).await,
         Command::Env(args) => commands::env::run(args).await,
         Command::Daemon(args) => commands::daemon::run(args).await,
+        Command::Kill => {
+            commands::daemon::run(commands::daemon::DaemonArgs {
+                command: commands::daemon::DaemonCommand::Kill,
+            })
+            .await
+        }
         Command::Import(args) => commands::import::run(args).await,
         Command::SendSignal(args) => commands::send_signal::run(args).await,
         Command::Scale(args) => commands::scale::run(args).await,

@@ -15,6 +15,7 @@ pub async fn run() -> Result<()> {
         version,
         uptime_secs,
         process_count,
+        ..
     } = result
     {
         let uptime_str = if uptime_secs < 60 {

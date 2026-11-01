@@ -18,6 +18,8 @@ pub enum DaemonCommand {
     Start,
     /// Stop oriond and all managed processes.
     Kill,
+    /// Stop oriond and all managed processes (alias for kill).
+    Stop,
 }
 
 pub async fn run(args: DaemonArgs) -> Result<()> {
@@ -35,13 +37,19 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
                             version,
                             uptime_secs,
                             process_count,
+                            pid,
                         },
                     ) = resp.body
                     {
                         println!("oriond status: online");
+                        if let Some(p) = pid {
+                            println!("  PID:           {}", p);
+                        }
                         println!("  Version:       {}", version);
                         println!("  Uptime:        {}s", uptime_secs);
                         println!("  Processes:     {}", process_count);
+                        #[cfg(not(windows))]
+                        println!("  Socket:        {}", orion_ipc::get_socket_path().display());
                     }
                 }
                 Err(_) => {
@@ -52,7 +60,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Start => {
             client::ensure_daemon().await?;
         }
-        DaemonCommand::Kill => {
+        DaemonCommand::Kill | DaemonCommand::Stop => {
             let ping = orion_core::protocol::Request::new(
                 0,
                 Method::DaemonStatus,

@@ -655,6 +655,7 @@ async fn dispatch_request(
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     uptime_secs,
                     process_count,
+                    pid: Some(std::process::id()),
                 },
             );
             writer.lock().await.send(&resp).await?;

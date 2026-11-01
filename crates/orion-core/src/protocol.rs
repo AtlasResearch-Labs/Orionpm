@@ -208,6 +208,8 @@ pub enum ResponseResult {
         version: String,
         uptime_secs: u64,
         process_count: u32,
+        #[serde(default)]
+        pid: Option<u32>,
     },
 }
 
