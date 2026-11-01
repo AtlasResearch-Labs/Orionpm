@@ -105,6 +105,18 @@ async fn run_supervisor_loop(
             cmd.creation_flags(0x08000000);
         }
 
+        // Fix Issue 6: Orphan prevention via PR_SET_PDEATHSIG.
+        // If oriond is killed (even SIGKILL or panic), the kernel will
+        // automatically send SIGTERM to every child process we spawned,
+        // preventing orphaned servers that cause port collisions on restart.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as u64, 0, 0, 0);
+                Ok(())
+            });
+        }
+
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {

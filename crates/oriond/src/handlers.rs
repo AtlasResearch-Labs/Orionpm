@@ -21,6 +21,7 @@ pub async fn serve(
     storage: Storage,
     logger: LogBus,
     shutdown: CancellationToken,
+    ready_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
 ) -> Result<()> {
     let start_time = Instant::now();
 
@@ -49,7 +50,7 @@ pub async fn serve(
         }
     };
 
-    orion_ipc::server::run(handler, shutdown).await
+    orion_ipc::server::run(handler, shutdown, ready_tx).await
 }
 
 async fn dispatch_request(
@@ -163,6 +164,11 @@ async fn dispatch_request(
                                 }
                                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                             }
+                            // Fix Issue 5: TCP port TIME_WAIT settle delay.
+                            // After the old process's PID exits, the Linux kernel keeps its
+                            // TCP sockets in TIME_WAIT for up to ~1s.  Waiting 400ms here
+                            // avoids EADDRINUSE races on the new worker's bind() call.
+                            tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
                             if let Some(new_token) = registry.reset_cancel_token(target_name) {
                                 crate::supervisor::spawn(
                                     target_name.clone(),

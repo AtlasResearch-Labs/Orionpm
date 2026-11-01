@@ -15,9 +15,60 @@ pub async fn run() -> Result<()> {
     let registry = ProcessRegistry::new();
     let shutdown = CancellationToken::new();
 
-    // ── Restore saved processes from disk ─────────────────────────────────────
-    // On every daemon start, re-launch any processes that were saved with
-    // `orion save`. This is what survives a daemon restart or system reboot.
+    // ── Spawn the system metrics collector task ───────────────────────────────
+    let metrics_registry = registry.clone();
+    let metrics_shutdown = shutdown.clone();
+    let metrics_logger = logger.clone();
+    tokio::spawn(async move {
+        crate::metrics::run(metrics_registry, metrics_logger, metrics_shutdown).await;
+    });
+
+    // ── Spawn the log pruner task (runs every 5 minutes) ─────────────────────
+    let pruner_storage = storage.clone();
+    let pruner_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        crate::pruner::run(pruner_storage, pruner_shutdown).await;
+    });
+
+    // ── Fix Issue 1 & 2: Bind IPC socket FIRST, before restoring any processes.
+    // If the socket cannot be bound (e.g. another live daemon holds it), abort
+    // immediately rather than becoming a headless ghost daemon that aggressively
+    // re-spawns processes it cannot control.
+    let ipc_shutdown = shutdown.clone();
+    let ipc_registry = registry.clone();
+    let ipc_storage = storage.clone();
+    let ipc_logger = logger.clone();
+    let ipc_ready = tokio::sync::oneshot::channel::<std::result::Result<(), String>>();
+    let (ipc_ready_tx, ipc_ready_rx) = ipc_ready;
+
+    tokio::spawn(async move {
+        if let Err(e) =
+            crate::handlers::serve(ipc_registry, ipc_storage, ipc_logger, ipc_shutdown.clone(), ipc_ready_tx).await
+        {
+            // IPC server failed to start or crashed — cancel the shutdown token
+            // so the daemon exits cleanly instead of becoming a headless ghost.
+            tracing::error!(error = %e, "Fatal: IPC server failed. Triggering daemon abort.");
+            ipc_shutdown.cancel();
+        }
+    });
+
+    // Wait for the IPC server to confirm it is listening (or fail) before
+    // spawning any managed processes.  This is the key ordering fix.
+    match ipc_ready_rx.await {
+        Ok(Ok(())) => {
+            info!("IPC server confirmed ready; restoring saved processes");
+        }
+        Ok(Err(e)) => {
+            tracing::error!("IPC server failed to bind: {}. Aborting daemon.", e);
+            std::process::exit(1);
+        }
+        Err(_) => {
+            tracing::error!("IPC server task dropped before signalling ready. Aborting daemon.");
+            std::process::exit(1);
+        }
+    }
+
+    // ── Fix Issue 2: Restore saved processes ONLY after IPC is bound ──────────
     let saved_processes = storage.load_saved_processes().unwrap_or_default();
     if saved_processes.is_empty() {
         info!("No saved process state found — starting clean");
@@ -40,34 +91,6 @@ pub async fn run() -> Result<()> {
             }
         }
     }
-
-    // ── Spawn the system metrics collector task ───────────────────────────────
-    let metrics_registry = registry.clone();
-    let metrics_shutdown = shutdown.clone();
-    let metrics_logger = logger.clone();
-    tokio::spawn(async move {
-        crate::metrics::run(metrics_registry, metrics_logger, metrics_shutdown).await;
-    });
-
-    // ── Spawn the log pruner task (runs every 5 minutes) ─────────────────────
-    let pruner_storage = storage.clone();
-    let pruner_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        crate::pruner::run(pruner_storage, pruner_shutdown).await;
-    });
-
-    // ── Spawn the IPC server task ─────────────────────────────────────────────
-    let ipc_shutdown = shutdown.clone();
-    let ipc_registry = registry.clone();
-    let ipc_storage = storage.clone();
-    let ipc_logger = logger.clone();
-    tokio::spawn(async move {
-        if let Err(e) =
-            crate::handlers::serve(ipc_registry, ipc_storage, ipc_logger, ipc_shutdown).await
-        {
-            tracing::error!(error = %e, "IPC server exited with error");
-        }
-    });
 
     info!("oriond ready");
 

@@ -35,8 +35,16 @@ impl ResponseWriter {
 /// Start the IPC server. Accepts connections in a loop and dispatches each
 /// incoming request to the provided handler function.
 ///
+/// `ready_tx` is fired with `Ok(())` once the listener is successfully bound,
+/// or `Err(reason)` if binding fails, allowing the caller to gate further
+/// startup work (e.g. restoring saved processes) on a live socket.
+///
 /// This function runs indefinitely until cancelled via the shutdown token.
-pub async fn run<H, Fut>(handler: H, shutdown: tokio_util::sync::CancellationToken) -> Result<()>
+pub async fn run<H, Fut>(
+    handler: H,
+    shutdown: tokio_util::sync::CancellationToken,
+    ready_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+) -> Result<()>
 where
     H: Fn(Request, Arc<Mutex<ResponseWriter>>) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
@@ -51,15 +59,39 @@ where
             } else {
                 false
             };
-            if !is_alive {
-                debug!("Removing stale IPC socket: {:?}", socket_path);
-                let _ = std::fs::remove_file(&socket_path);
+            if is_alive {
+                // A live daemon is already running — signal failure and abort.
+                let _ = ready_tx.send(Err(format!(
+                    "Address already in use: a live oriond is already listening on {:?}",
+                    socket_path
+                )));
+                return Err(anyhow::anyhow!(
+                    "IPC socket already in use by a live daemon: {:?}",
+                    socket_path
+                ));
             }
+            debug!("Removing stale IPC socket: {:?}", socket_path);
+            let _ = std::fs::remove_file(&socket_path);
         }
     }
 
-    let name = get_socket_name()?;
-    let listener = ListenerOptions::new().name(name).create_tokio()?;
+    let name = match get_socket_name() {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = ready_tx.send(Err(format!("Failed to resolve socket name: {}", e)));
+            return Err(e);
+        }
+    };
+    let listener = match ListenerOptions::new().name(name).create_tokio() {
+        Ok(l) => l,
+        Err(e) => {
+            let _ = ready_tx.send(Err(format!("Failed to bind IPC socket: {}", e)));
+            return Err(e.into());
+        }
+    };
+
+    // Signal to daemon.rs that the socket is live and processes can be restored.
+    let _ = ready_tx.send(Ok(()));
     info!("IPC server listening");
 
     loop {
@@ -107,7 +139,16 @@ where
 
     loop {
         line.clear();
-        let n = buf_reader.read_line(&mut line).await?;
+        // Fix Issue 7: treat broken-pipe / EPIPE / POLLHUP (read returning
+        // error or 0 bytes) as a clean client disconnect rather than an error.
+        let n = match buf_reader.read_line(&mut line).await {
+            Ok(n) => n,
+            Err(e) => {
+                // EPIPE / connection reset / terminal closed — not a real error.
+                debug!(error = %e, "IPC connection read error (client disconnected)");
+                return Ok(());
+            }
+        };
 
         if n == 0 {
             // Client disconnected.
@@ -127,7 +168,15 @@ where
                 let writer_clone = Arc::clone(&writer);
                 tokio::spawn(async move {
                     if let Err(e) = handler(request, writer_clone).await {
-                        error!(error = %e, "Handler error processing request");
+                        // Suppress broken pipe errors from log streaming tasks
+                        // that are terminated by the client closing the terminal.
+                        let is_pipe_error = e
+                            .downcast_ref::<std::io::Error>()
+                            .map(|io| matches!(io.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset))
+                            .unwrap_or(false);
+                        if !is_pipe_error {
+                            error!(error = %e, "Handler error processing request");
+                        }
                     }
                 });
             }

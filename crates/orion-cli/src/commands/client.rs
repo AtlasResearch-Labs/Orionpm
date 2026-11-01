@@ -10,15 +10,28 @@ pub async fn ensure_daemon() -> Result<()> {
         Method::DaemonStatus,
         Params::DaemonStatus(EmptyParams {}),
     );
-    if orion_ipc::client::send(&ping).await.is_ok() {
-        return Ok(());
+
+    // Fix Issue 4: Retry 3 times with 300 ms backoff before deciding the daemon
+    // is dead.  This prevents false-positive auto-spawns when the system is
+    // under heavy load or the daemon is mid-startup (e.g. from systemd).
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY_MS: u64 = 300;
+
+    for attempt in 0..MAX_RETRIES {
+        if orion_ipc::client::send(&ping).await.is_ok() {
+            return Ok(());
+        }
+        if attempt < MAX_RETRIES - 1 {
+            tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+        }
     }
 
+    // Daemon is genuinely unreachable — spawn it.
     println!("oriond is not running. Starting in background...");
     spawn_daemon()?;
 
     let start = Instant::now();
-    let timeout = Duration::from_secs(4);
+    let timeout = Duration::from_secs(5);
     while start.elapsed() < timeout {
         tokio::time::sleep(Duration::from_millis(200)).await;
         if orion_ipc::client::send(&ping).await.is_ok() {

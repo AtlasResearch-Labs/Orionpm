@@ -32,3 +32,4 @@ notify = { workspace = true }
 lettre = { workspace = true }
 reqwest = { workspace = true }
 libc = { workspace = true }
+fs2 = "0.4"
