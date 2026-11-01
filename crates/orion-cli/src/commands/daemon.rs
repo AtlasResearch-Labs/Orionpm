@@ -49,7 +49,10 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
                         println!("  Uptime:        {}s", uptime_secs);
                         println!("  Processes:     {}", process_count);
                         #[cfg(not(windows))]
-                        println!("  Socket:        {}", orion_ipc::get_socket_path().display());
+                        println!(
+                            "  Socket:        {}",
+                            orion_ipc::get_socket_path().display()
+                        );
                     }
                 }
                 Err(_) => {

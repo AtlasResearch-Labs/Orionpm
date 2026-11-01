@@ -42,8 +42,14 @@ pub async fn run() -> Result<()> {
     let (ipc_ready_tx, ipc_ready_rx) = ipc_ready;
 
     tokio::spawn(async move {
-        if let Err(e) =
-            crate::handlers::serve(ipc_registry, ipc_storage, ipc_logger, ipc_shutdown.clone(), ipc_ready_tx).await
+        if let Err(e) = crate::handlers::serve(
+            ipc_registry,
+            ipc_storage,
+            ipc_logger,
+            ipc_shutdown.clone(),
+            ipc_ready_tx,
+        )
+        .await
         {
             // IPC server failed to start or crashed — cancel the shutdown token
             // so the daemon exits cleanly instead of becoming a headless ghost.

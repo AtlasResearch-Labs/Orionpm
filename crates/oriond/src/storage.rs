@@ -21,7 +21,6 @@ impl std::fmt::Debug for Storage {
 impl Storage {
     /// Returns the platform-appropriate data directory for oriond state files.
     /// Public so that `main` can place the master lockfile in the same directory.
-    #[allow(dead_code)]
     pub fn data_dir() -> std::path::PathBuf {
         data_dir()
     }

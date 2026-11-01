@@ -31,16 +31,17 @@ async fn main() -> Result<()> {
     // Prevents two oriond instances from running simultaneously under the same
     // user (e.g. systemd service racing against a CLI-spawned daemon).
     // The lock is held for the lifetime of this process and released by the OS
-    // on exit — even if we are killed with SIGKILL.
-    #[cfg(unix)]
+    // on exit — even if we are killed with SIGKILL or Task Manager.
     let _lock_guard = {
         use fs2::FileExt;
         let data_dir = storage::Storage::data_dir();
         std::fs::create_dir_all(&data_dir)?;
         let lock_path = data_dir.join("orion.lock");
         let lock_file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)?;
         if lock_file.try_lock_exclusive().is_err() {
             eprintln!(

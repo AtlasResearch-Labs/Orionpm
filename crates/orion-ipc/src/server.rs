@@ -120,7 +120,7 @@ where
 
     #[cfg(not(windows))]
     {
-        let socket_path = std::env::temp_dir().join(crate::SOCKET_NAME);
+        let socket_path = crate::get_socket_path();
         let _ = std::fs::remove_file(&socket_path);
     }
 
@@ -172,7 +172,13 @@ where
                         // that are terminated by the client closing the terminal.
                         let is_pipe_error = e
                             .downcast_ref::<std::io::Error>()
-                            .map(|io| matches!(io.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset))
+                            .map(|io| {
+                                matches!(
+                                    io.kind(),
+                                    std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::ConnectionReset
+                                )
+                            })
                             .unwrap_or(false);
                         if !is_pipe_error {
                             error!(error = %e, "Handler error processing request");
