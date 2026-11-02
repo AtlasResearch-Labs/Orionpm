@@ -8,6 +8,10 @@ use super::client;
 pub struct EnvArgs {
     /// Name or numeric ID of the process.
     pub target: String,
+
+    /// Output environment variables as JSON.
+    #[arg(long, short = 'j')]
+    pub json: bool,
 }
 
 pub async fn run(args: EnvArgs) -> Result<()> {
@@ -20,13 +24,24 @@ pub async fn run(args: EnvArgs) -> Result<()> {
     .await?;
 
     if let ResponseResult::ProcessInfo { process } = result {
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&process.env)?);
+            return Ok(());
+        }
+
         println!(
             "Environment for process '{}' (id: {}):",
             process.name, process.id
         );
-        println!("  Command: {}", process.command);
-        println!("  Mode:    {}", process.mode);
-        println!("  Status:  {}", process.state.label());
+        if process.env.is_empty() {
+            println!("  (No custom environment variables configured)");
+        } else {
+            let mut keys: Vec<_> = process.env.keys().collect();
+            keys.sort();
+            for k in keys {
+                println!("  {}={}", k, process.env[k]);
+            }
+        }
     }
 
     Ok(())

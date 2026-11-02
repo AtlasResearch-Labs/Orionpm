@@ -15,6 +15,7 @@ pub mod restore;
 pub mod save;
 pub mod scale;
 pub mod send_signal;
+pub mod serve;
 pub mod start;
 pub mod startup;
 pub mod stop;

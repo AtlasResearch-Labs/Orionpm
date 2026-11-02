@@ -29,6 +29,7 @@ pub async fn run(args: ReloadArgs) -> Result<()> {
             cron: None,
             exp_backoff: None,
             instances: None,
+            env_profile: None,
             watch: false,
             watch_paths: Vec::new(),
             no_restart: false,

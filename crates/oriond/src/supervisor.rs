@@ -240,12 +240,20 @@ async fn run_supervisor_loop(
         info!(name = %name, pid = pid, "Process is running");
         registry.set_state(&name, ProcessState::Running { pid });
 
-        // Stream stdout (mirrored to file if configured, and written to SQLite logger)
+        // Stream stdout (mirrored to file with auto-rotation if configured, and written to SQLite logger)
         if let Some(stdout) = child.stdout.take() {
             let logger_clone = logger.clone();
             let name_clone = name.clone();
             let stdout_log_path = config.stdout_log.clone();
             tokio::spawn(async move {
+                let mut bytes_written = if let Some(ref path) = stdout_log_path {
+                    tokio::fs::metadata(path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
                 let mut file_sink = if let Some(ref path) = stdout_log_path {
                     if let Some(parent) = path.parent() {
                         let _ = tokio::fs::create_dir_all(parent).await;
@@ -262,10 +270,8 @@ async fn run_supervisor_loop(
 
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(ref mut f) = file_sink {
-                        let _ = f.write_all(line.as_bytes()).await;
-                        let _ = f.write_all(b"\n").await;
-                        let _ = f.flush().await;
+                    if let Some(ref path) = stdout_log_path {
+                        write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line).await;
                     }
 
                     logger_clone.log(
@@ -280,12 +286,20 @@ async fn run_supervisor_loop(
             });
         }
 
-        // Stream stderr (mirrored to file if configured, and written to SQLite logger)
+        // Stream stderr (mirrored to file with auto-rotation if configured, and written to SQLite logger)
         if let Some(stderr) = child.stderr.take() {
             let logger_clone = logger.clone();
             let name_clone = name.clone();
             let stderr_log_path = config.stderr_log.clone();
             tokio::spawn(async move {
+                let mut bytes_written = if let Some(ref path) = stderr_log_path {
+                    tokio::fs::metadata(path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
                 let mut file_sink = if let Some(ref path) = stderr_log_path {
                     if let Some(parent) = path.parent() {
                         let _ = tokio::fs::create_dir_all(parent).await;
@@ -302,10 +316,8 @@ async fn run_supervisor_loop(
 
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(ref mut f) = file_sink {
-                        let _ = f.write_all(line.as_bytes()).await;
-                        let _ = f.write_all(b"\n").await;
-                        let _ = f.flush().await;
+                    if let Some(ref path) = stderr_log_path {
+                        write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line).await;
                     }
 
                     logger_clone.log(
@@ -1106,6 +1118,49 @@ async fn run_cron_scheduler(
         }
     }
 }
+
+const MAX_LOG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB per file (PM2 logrotate standard)
+const MAX_BACKUP_FILES: usize = 3;
+
+/// Writes a log line to the file sink and rotates the file when it exceeds 10 MB.
+/// Keeps up to 3 backup files (.1, .2, .3) to prevent unbounded disk usage.
+async fn write_and_rotate_log(
+    path: &Path,
+    file_sink: &mut Option<tokio::fs::File>,
+    bytes_written: &mut u64,
+    line: &str,
+) {
+    if let Some(ref mut f) = file_sink {
+        let line_len = line.len() as u64 + 1;
+        let _ = f.write_all(line.as_bytes()).await;
+        let _ = f.write_all(b"\n").await;
+        let _ = f.flush().await;
+        *bytes_written += line_len;
+
+        if *bytes_written >= MAX_LOG_FILE_BYTES {
+            // Drop current handle to close file before rename (critical on Windows)
+            drop(file_sink.take());
+
+            // Rotate existing backup files: e.g. .2 -> .3, .1 -> .2
+            for i in (1..MAX_BACKUP_FILES).rev() {
+                let src = format!("{}.{}", path.display(), i);
+                let dst = format!("{}.{}", path.display(), i + 1);
+                let _ = tokio::fs::rename(&src, &dst).await;
+            }
+            let first_backup = format!("{}.1", path.display());
+            let _ = tokio::fs::rename(path, &first_backup).await;
+
+            *file_sink = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .await
+                .ok();
+            *bytes_written = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

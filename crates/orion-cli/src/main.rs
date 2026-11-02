@@ -100,6 +100,9 @@ enum Command {
     /// Perform zero-downtime in-place upgrade of the orion daemon.
     Update,
 
+    /// Serve static files or single-page applications (SPA).
+    Serve(commands::serve::ServeArgs),
+
     /// Launch the real-time web dashboard.
     #[command(alias = "dashboard")]
     Web(commands::web::WebArgs),
@@ -149,6 +152,7 @@ async fn main() -> Result<()> {
         Command::SendSignal(args) => commands::send_signal::run(args).await,
         Command::Scale(args) => commands::scale::run(args).await,
         Command::Update => commands::update::run().await,
+        Command::Serve(args) => commands::serve::run(args).await,
         Command::Web(args) => commands::web::run(args).await,
     };
 

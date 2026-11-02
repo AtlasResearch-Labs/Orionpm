@@ -107,6 +107,34 @@ pub struct ProcessInfo {
 
     /// The command being run.
     pub command: String,
+
+    /// Environment variables injected into the process.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+
+    /// Working directory for the process.
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
+
+    /// Path to mirror stdout logs.
+    #[serde(default)]
+    pub stdout_log: Option<std::path::PathBuf>,
+
+    /// Path to mirror stderr logs.
+    #[serde(default)]
+    pub stderr_log: Option<std::path::PathBuf>,
+
+    /// Whether file watch mode is active.
+    #[serde(default)]
+    pub watch: bool,
+
+    /// Maximum RSS memory limit in MB (0 = no limit).
+    #[serde(default)]
+    pub max_memory_mb: u64,
+
+    /// Scheduled cron restart expression if set.
+    #[serde(default)]
+    pub cron_restart: Option<String>,
 }
 
 impl ProcessInfo {
@@ -208,6 +236,13 @@ mod tests {
             memory_bytes: Some(134_217_728), // 128 MB exactly
             mode: "fork".to_string(),
             command: "node".to_string(),
+            env: std::collections::HashMap::new(),
+            cwd: None,
+            stdout_log: None,
+            stderr_log: None,
+            watch: false,
+            max_memory_mb: 0,
+            cron_restart: None,
         };
         assert_eq!(info.memory_display(), "128.0 MB");
 

@@ -38,6 +38,7 @@ pub struct Response {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     Result(ResponseResult),
     Error(RpcError),
@@ -184,6 +185,7 @@ pub struct ScaleParams {
 /// All possible result payloads from the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseResult {
     /// Returned for process.list.
     ProcessList { processes: Vec<ProcessInfo> },

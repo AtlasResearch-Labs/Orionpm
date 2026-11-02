@@ -58,6 +58,13 @@ impl ProcessHandle {
             } else {
                 self.config.command.clone()
             },
+            env: self.config.env.clone(),
+            cwd: self.config.cwd.clone(),
+            stdout_log: self.config.stdout_log.clone(),
+            stderr_log: self.config.stderr_log.clone(),
+            watch: self.config.watch,
+            max_memory_mb: self.config.max_memory_mb,
+            cron_restart: self.config.cron_restart.clone(),
         }
     }
 }

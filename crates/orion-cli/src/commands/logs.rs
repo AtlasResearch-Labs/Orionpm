@@ -27,6 +27,14 @@ pub struct LogsArgs {
     /// Raw log output without timestamps or process prefixes.
     #[arg(long)]
     pub raw: bool,
+
+    /// Only display error logs (stderr).
+    #[arg(long, conflicts_with = "out")]
+    pub err: bool,
+
+    /// Only display standard output logs (stdout).
+    #[arg(long, conflicts_with = "err")]
+    pub out: bool,
 }
 
 pub async fn run(args: LogsArgs) -> Result<()> {
@@ -36,9 +44,16 @@ pub async fn run(args: LogsArgs) -> Result<()> {
 
     if !args.raw {
         let stream_hint = if follow { ", Ctrl+C to exit" } else { "" };
+        let filter_hint = if args.err {
+            " [STDERR ONLY]"
+        } else if args.out {
+            " [STDOUT ONLY]"
+        } else {
+            ""
+        };
         println!(
-            "\x1b[1;36m[TAILING]\x1b[0m Tailing last {} lines for [{}] (change with --lines <N>{})",
-            args.lines, args.target, stream_hint
+            "\x1b[1;36m[TAILING]\x1b[0m Tailing last {} lines for [{}{}]{} (change with --lines <N>)",
+            args.lines, args.target, filter_hint, stream_hint
         );
     }
 
@@ -53,8 +68,16 @@ pub async fn run(args: LogsArgs) -> Result<()> {
     );
 
     let raw = args.raw;
+    let only_err = args.err;
+    let only_out = args.out;
     orion_ipc::client::stream_logs(&req, move |response| {
         if let ResponseBody::Result(ResponseResult::LogLine { name, line }) = response.body {
+            if only_err && line.stream != LogStream::Stderr {
+                return;
+            }
+            if only_out && line.stream != LogStream::Stdout {
+                return;
+            }
             print_log_line(&name, &line, raw);
         }
     })

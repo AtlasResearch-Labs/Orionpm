@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use orion_core::config::{AppConfig, ExecutionMode, HealthConfig, OrionConfig, RestartPolicy};
-use orion_core::pm2::{parse_memory_string, parse_pm2_ecosystem};
+use orion_core::pm2::{parse_memory_string, parse_pm2_ecosystem_with_profile};
 use orion_core::procfile::parse_procfile;
 use orion_core::protocol::{Method, Params, StartParams};
 use std::collections::HashMap;
@@ -47,9 +47,13 @@ pub struct StartArgs {
     #[arg(long, conflicts_with = "watch")]
     pub no_restart: bool,
 
-    /// Environment variables in KEY=VALUE format (repeatable).
-    #[arg(long = "env", value_name = "KEY=VALUE")]
+    /// Environment variables in KEY=VALUE format (repeatable). If a value without '=' is passed, it is treated as an environment profile.
+    #[arg(long = "env", value_name = "KEY=VALUE|PROFILE")]
     pub env: Vec<String>,
+
+    /// Environment profile to activate from PM2 ecosystem config (e.g. "production", "staging").
+    #[arg(long = "env-profile", alias = "profile")]
+    pub env_profile: Option<String>,
 
     /// Working directory for the process.
     #[arg(long)]
@@ -143,11 +147,24 @@ pub async fn run(args: StartArgs) -> Result<()> {
             || args.target.ends_with("pm2.json"))
     {
         // 2. Target is a recognized PM2 ecosystem file
-        println!(
-            "Detected PM2 configuration in '{}'. Parsing applications...",
-            args.target
-        );
-        let apps = parse_pm2_ecosystem(target_path)
+        let profile = args.env_profile.as_deref().or_else(|| {
+            args.env
+                .iter()
+                .find(|s| !s.contains('='))
+                .map(|s| s.as_str())
+        });
+        if let Some(p) = profile {
+            println!(
+                "Detected PM2 configuration in '{}' (activating environment profile: '{}')...",
+                args.target, p
+            );
+        } else {
+            println!(
+                "Detected PM2 configuration in '{}'. Parsing applications...",
+                args.target
+            );
+        }
+        let apps = parse_pm2_ecosystem_with_profile(target_path, profile)
             .with_context(|| format!("Failed to parse PM2 configuration: {}", args.target))?;
 
         if apps.is_empty() {

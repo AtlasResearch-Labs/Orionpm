@@ -10,8 +10,17 @@ use crate::config::{AlertConfig, AppConfig, ExecutionMode, OrionConfig, RestartP
 /// Parse a PM2 ecosystem file (ecosystem.config.js, ecosystem.json, pm2.json, etc.)
 /// into a map of app name to orion AppConfig.
 pub fn parse_pm2_ecosystem(path: &Path) -> Result<HashMap<String, AppConfig>> {
+    parse_pm2_ecosystem_with_profile(path, None)
+}
+
+/// Parse a PM2 ecosystem file with an optional environment profile (e.g. "production", "staging")
+/// which overlays `env_<profile>` on top of the base `env` configuration.
+pub fn parse_pm2_ecosystem_with_profile(
+    path: &Path,
+    env_profile: Option<&str>,
+) -> Result<HashMap<String, AppConfig>> {
     let json_val = read_as_json(path)?;
-    parse_apps_from_json(&json_val, path)
+    parse_apps_from_json(&json_val, path, env_profile)
 }
 
 /// Convert a set of AppConfigs into a valid orion.toml configuration string.
@@ -298,7 +307,11 @@ fn parse_js_ecosystem_native(content: &str) -> Option<Value> {
     None
 }
 
-fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<String, AppConfig>> {
+fn parse_apps_from_json(
+    root: &Value,
+    source_path: &Path,
+    env_profile: Option<&str>,
+) -> Result<HashMap<String, AppConfig>> {
     let apps_array = if let Some(arr) = root.get("apps").and_then(|v| v.as_array()) {
         arr
     } else if let Some(arr) = root.as_array() {
@@ -395,7 +408,7 @@ fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<Stri
             })
             .or_else(|| Some(base_dir.clone()));
 
-        // Environment variables
+        // Environment variables: start with base `env` block
         let mut env = HashMap::new();
         if let Some(env_obj) = app_val.get("env").and_then(|v| v.as_object()) {
             for (k, v) in env_obj {
@@ -405,6 +418,23 @@ fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<Stri
                     env.insert(k.clone(), n.to_string());
                 } else if let Some(b) = v.as_bool() {
                     env.insert(k.clone(), b.to_string());
+                }
+            }
+        }
+
+        // Profile overlay: if an env profile is specified (e.g. "production", "staging"),
+        // overlay values from `env_<profile>` over the base environment.
+        if let Some(profile) = env_profile {
+            let profile_key = format!("env_{}", profile);
+            if let Some(profile_obj) = app_val.get(&profile_key).and_then(|v| v.as_object()) {
+                for (k, v) in profile_obj {
+                    if let Some(s) = v.as_str() {
+                        env.insert(k.clone(), s.to_string());
+                    } else if let Some(n) = v.as_i64() {
+                        env.insert(k.clone(), n.to_string());
+                    } else if let Some(b) = v.as_bool() {
+                        env.insert(k.clone(), b.to_string());
+                    }
                 }
             }
         }
@@ -648,7 +678,7 @@ mod tests {
         }"#;
 
         let val: Value = serde_json::from_str(json_raw).unwrap();
-        let apps = parse_apps_from_json(&val, Path::new(".")).unwrap();
+        let apps = parse_apps_from_json(&val, Path::new("."), None).unwrap();
         assert_eq!(apps.len(), 1);
 
         let app = apps.get("api-service").expect("app missing");
@@ -725,7 +755,7 @@ mod tests {
         "#;
 
         let val = parse_js_ecosystem_native(js_raw).expect("native parsing failed");
-        let apps = parse_apps_from_json(&val, Path::new(".")).unwrap();
+        let apps = parse_apps_from_json(&val, Path::new("."), None).unwrap();
         assert_eq!(apps.len(), 1);
 
         let app = apps.get("my-service").expect("app missing");
@@ -734,5 +764,47 @@ mod tests {
         assert_eq!(app.instances, 2);
         assert_eq!(app.mode, ExecutionMode::Cluster);
         assert_eq!(app.env.get("PORT"), Some(&"3000".to_string()));
+    }
+
+    #[test]
+    fn test_parse_ecosystem_env_profile_overlay() {
+        let json_str = r#"
+            {
+                "apps": [{
+                    "name": "api",
+                    "script": "server.js",
+                    "env": {
+                        "NODE_ENV": "development",
+                        "PORT": "3000",
+                        "DEBUG": "true"
+                    },
+                    "env_production": {
+                        "NODE_ENV": "production",
+                        "PORT": "8080"
+                    }
+                }]
+            }
+        "#;
+        let val: Value = serde_json::from_str(json_str).unwrap();
+
+        // Default (no profile)
+        let apps_dev = parse_apps_from_json(&val, Path::new("."), None).unwrap();
+        let api_dev = apps_dev.get("api").unwrap();
+        assert_eq!(
+            api_dev.env.get("NODE_ENV"),
+            Some(&"development".to_string())
+        );
+        assert_eq!(api_dev.env.get("PORT"), Some(&"3000".to_string()));
+        assert_eq!(api_dev.env.get("DEBUG"), Some(&"true".to_string()));
+
+        // Production profile overlay
+        let apps_prod = parse_apps_from_json(&val, Path::new("."), Some("production")).unwrap();
+        let api_prod = apps_prod.get("api").unwrap();
+        assert_eq!(
+            api_prod.env.get("NODE_ENV"),
+            Some(&"production".to_string())
+        );
+        assert_eq!(api_prod.env.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(api_prod.env.get("DEBUG"), Some(&"true".to_string())); // Base env preserved!
     }
 }

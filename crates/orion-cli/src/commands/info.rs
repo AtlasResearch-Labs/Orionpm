@@ -59,10 +59,36 @@ pub async fn run(args: InfoArgs) -> Result<()> {
         println!("  Status:        {}", process.state.label());
         println!("  Mode:          {}", process.mode);
         println!("  Command:       {}", process.command);
+        if let Some(ref cwd) = process.cwd {
+            println!("  CWD:           {}", cwd.display());
+        }
+        if let Some(ref out) = process.stdout_log {
+            println!("  Out Log:       {}", out.display());
+        }
+        if let Some(ref err) = process.stderr_log {
+            println!("  Err Log:       {}", err.display());
+        }
+        println!(
+            "  Watch:         {}",
+            if process.watch { "enabled" } else { "disabled" }
+        );
+        if process.max_memory_mb > 0 {
+            println!("  Max Memory:    {} MB", process.max_memory_mb);
+        }
+        if let Some(ref cron) = process.cron_restart {
+            println!("  Cron Restart:  {}", cron);
+        }
         println!("  Restarts:      {}", process.restart_count);
         println!("  Uptime:        {}", uptime);
         println!("  Memory:        {}", process.memory_display());
         println!("  CPU:           {}", cpu);
+        if !process.env.is_empty() {
+            println!(
+                "  Env Vars:      {} configured (use 'orion env {}' to inspect)",
+                process.env.len(),
+                process.name
+            );
+        }
     }
 
     Ok(())
