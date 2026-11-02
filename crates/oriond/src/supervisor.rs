@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -104,6 +104,10 @@ async fn run_supervisor_loop(
         };
 
     loop {
+        // Fix P0 Bug 6: Drain any lingering supervisor commands (e.g. stale MemoryRestart triggers)
+        // so that triggers from previous instances do not cause the newly spawned child to immediately restart!
+        while cmd_rx.try_recv().is_ok() {}
+
         // Check if supervisor was cancelled before starting
         if cancel_token.is_cancelled() {
             info!(name = %name, "Supervisor cancelled before process start");
@@ -241,94 +245,38 @@ async fn run_supervisor_loop(
         registry.set_state(&name, ProcessState::Running { pid });
 
         // Stream stdout (mirrored to file with auto-rotation if configured, and written to SQLite logger)
+        // Fix P0 Bug 2: Safe byte chunk reader with from_utf8_lossy and 64KB line length cap
         if let Some(stdout) = child.stdout.take() {
             let logger_clone = logger.clone();
             let name_clone = name.clone();
             let stdout_log_path = config.stdout_log.clone();
             tokio::spawn(async move {
-                let mut bytes_written = if let Some(ref path) = stdout_log_path {
-                    tokio::fs::metadata(path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                let mut file_sink = if let Some(ref path) = stdout_log_path {
-                    if let Some(parent) = path.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .await
-                        .ok()
-                } else {
-                    None
-                };
-
-                let mut reader = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(ref path) = stdout_log_path {
-                        write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line).await;
-                    }
-
-                    logger_clone.log(
-                        &name_clone,
-                        LogLine {
-                            timestamp: unix_now(),
-                            stream: LogStream::Stdout,
-                            text: line,
-                        },
-                    );
-                }
+                stream_process_output(
+                    stdout,
+                    LogStream::Stdout,
+                    name_clone,
+                    stdout_log_path,
+                    logger_clone,
+                )
+                .await;
             });
         }
 
         // Stream stderr (mirrored to file with auto-rotation if configured, and written to SQLite logger)
+        // Fix P0 Bug 2: Safe byte chunk reader with from_utf8_lossy and 64KB line length cap
         if let Some(stderr) = child.stderr.take() {
             let logger_clone = logger.clone();
             let name_clone = name.clone();
             let stderr_log_path = config.stderr_log.clone();
             tokio::spawn(async move {
-                let mut bytes_written = if let Some(ref path) = stderr_log_path {
-                    tokio::fs::metadata(path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                let mut file_sink = if let Some(ref path) = stderr_log_path {
-                    if let Some(parent) = path.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .await
-                        .ok()
-                } else {
-                    None
-                };
-
-                let mut reader = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(ref path) = stderr_log_path {
-                        write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line).await;
-                    }
-
-                    logger_clone.log(
-                        &name_clone,
-                        LogLine {
-                            timestamp: unix_now(),
-                            stream: LogStream::Stderr,
-                            text: line,
-                        },
-                    );
-                }
+                stream_process_output(
+                    stderr,
+                    LogStream::Stderr,
+                    name_clone,
+                    stderr_log_path,
+                    logger_clone,
+                )
+                .await;
             });
         }
 
@@ -350,6 +298,8 @@ async fn run_supervisor_loop(
         let mut memory_limit_triggered = false;
         let mut cron_restart_triggered = false;
 
+        let kill_timeout = config.kill_timeout_secs.max(1);
+
         let exit_status = tokio::select! {
             biased;
 
@@ -361,7 +311,7 @@ async fn run_supervisor_loop(
                     registry.set_state(&name, ProcessState::Stopping);
                 }
 
-                graceful_terminate_child(&mut child, pid, 4).await;
+                graceful_terminate_child(&mut child, pid, kill_timeout).await;
                 if !is_restarting {
                     registry.set_state(&name, ProcessState::Stopped);
                 }
@@ -401,7 +351,9 @@ async fn run_supervisor_loop(
                             });
                         }
 
-                        graceful_terminate_child(&mut child, pid, 4).await;
+                        // Fix P0 Bug 6: Mark state as Stopping immediately so metrics tick does not enqueue duplicate restart commands
+                        registry.set_state(&name, ProcessState::Stopping);
+                        graceful_terminate_child(&mut child, pid, kill_timeout).await;
                         memory_limit_triggered = true;
                         None
                     }
@@ -423,7 +375,7 @@ async fn run_supervisor_loop(
                         text: format!("[orion] File change detected: {}. Restarting...", changed_path.display()),
                     },
                 );
-                graceful_terminate_child(&mut child, pid, 4).await;
+                graceful_terminate_child(&mut child, pid, kill_timeout).await;
                 file_change_triggered = true;
                 None
             }
@@ -444,7 +396,7 @@ async fn run_supervisor_loop(
                         text: "[orion] Cron-scheduled restart triggered.".to_string(),
                     },
                 );
-                graceful_terminate_child(&mut child, pid, 4).await;
+                graceful_terminate_child(&mut child, pid, kill_timeout).await;
                 cron_restart_triggered = true;
                 None
             }
@@ -461,7 +413,7 @@ async fn run_supervisor_loop(
                         text: err_msg,
                     },
                 );
-                graceful_terminate_child(&mut child, pid, 4).await;
+                graceful_terminate_child(&mut child, pid, kill_timeout).await;
                 health_failure_triggered = true;
                 None
             }
@@ -968,7 +920,11 @@ async fn send_crash_email(
 
     let creds = Credentials::new(smtp.username.clone(), password);
     let builder_res = if smtp.tls {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host)
+        if smtp.port == 587 {
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp.host)
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host)
+        }
     } else {
         Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
             &smtp.host,
@@ -1025,10 +981,11 @@ async fn run_health_probe(
     let mut consecutive_failures = 0;
     let interval = Duration::from_secs(health.interval_secs.max(1));
 
-    // Initial 2-second grace period to allow the application to bind its sockets
+    // Fix P1 Bug 7: Configurable initial startup grace period for slow-booting JVM apps
+    let start_grace = Duration::from_secs(health.start_period_secs.max(2));
     tokio::select! {
         _ = cancel_token.cancelled() => return,
-        _ = sleep(Duration::from_secs(2)) => {}
+        _ = sleep(start_grace) => {}
     }
 
     loop {
@@ -1080,7 +1037,7 @@ async fn run_health_probe(
 }
 
 /// Background task that fires on each scheduled cron time and notifies the supervisor
-/// to perform a clean restart. Uses UTC time for scheduling.
+/// to perform a clean restart. Fix P1 Bug 10: Uses server-local time (chrono::Local) matching PM2.
 async fn run_cron_scheduler(
     app_name: String,
     schedule: cron::Schedule,
@@ -1088,9 +1045,9 @@ async fn run_cron_scheduler(
     cancel_token: CancellationToken,
 ) {
     loop {
-        // Find the next scheduled time after now (UTC).
-        let now_utc = chrono::Utc::now();
-        let next = match schedule.upcoming(chrono::Utc).next() {
+        // Find the next scheduled time after now in server-local time.
+        let now_local = chrono::Local::now();
+        let next = match schedule.upcoming(chrono::Local).next() {
             Some(t) => t,
             None => {
                 warn!(app = %app_name, "Cron schedule produced no upcoming times; disabling cron restarts");
@@ -1098,12 +1055,14 @@ async fn run_cron_scheduler(
             }
         };
 
-        let until_next = (next - now_utc).to_std().unwrap_or(Duration::from_secs(60));
+        let until_next = (next - now_local)
+            .to_std()
+            .unwrap_or(Duration::from_secs(60));
         info!(
             app = %app_name,
             next_restart = %next,
             secs_until = until_next.as_secs(),
-            "Cron restart scheduled"
+            "Cron restart scheduled (server-local time)"
         );
 
         tokio::select! {
@@ -1121,6 +1080,130 @@ async fn run_cron_scheduler(
 
 const MAX_LOG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB per file (PM2 logrotate standard)
 const MAX_BACKUP_FILES: usize = 3;
+
+/// Streams raw output bytes from child process stdout/stderr.
+/// Fix P0 Bug 2: Uses chunked byte buffer with `from_utf8_lossy` so invalid UTF-8 bytes
+/// (e.g. \xFF, binary dumps, compressed chunks) never crash or terminate the stream.
+/// Enforces a 64 KB per-line cap to eliminate unbounded memory growth on missing newlines.
+async fn stream_process_output<R: AsyncRead + Unpin>(
+    mut reader: R,
+    stream_type: LogStream,
+    name: String,
+    log_path: Option<PathBuf>,
+    logger: LogBus,
+) {
+    let mut bytes_written = if let Some(ref path) = log_path {
+        tokio::fs::metadata(path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let mut file_sink = if let Some(ref path) = log_path {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
+    const MAX_LINE_BYTES: usize = 65_536; // 64 KB cap per line
+    let mut read_buf = [0u8; 8192];
+    let mut line_buf = Vec::with_capacity(1024);
+
+    loop {
+        let n = match reader.read(&mut read_buf).await {
+            Ok(0) => break, // EOF reached
+            Ok(n) => n,
+            Err(e) => {
+                debug!(name = %name, error = %e, "Process output stream read completed or closed");
+                break;
+            }
+        };
+
+        let chunk = &read_buf[..n];
+        let mut start = 0;
+
+        for (i, &b) in chunk.iter().enumerate() {
+            if b == b'\n' {
+                line_buf.extend_from_slice(&chunk[start..i]);
+                start = i + 1;
+
+                // Strip trailing \r if present (CRLF on Windows)
+                if line_buf.ends_with(b"\r") {
+                    line_buf.pop();
+                }
+
+                let line_str = String::from_utf8_lossy(&line_buf).into_owned();
+                line_buf.clear();
+
+                if let Some(ref path) = log_path {
+                    write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line_str).await;
+                }
+
+                logger.log(
+                    &name,
+                    LogLine {
+                        timestamp: unix_now(),
+                        stream: stream_type,
+                        text: line_str,
+                    },
+                );
+            } else if line_buf.len() + (i - start) >= MAX_LINE_BYTES {
+                // Line exceeded 64 KB without a newline: flush chunk safely to protect memory
+                line_buf.extend_from_slice(&chunk[start..=i]);
+                start = i + 1;
+
+                let line_str = String::from_utf8_lossy(&line_buf).into_owned();
+                line_buf.clear();
+
+                if let Some(ref path) = log_path {
+                    write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line_str).await;
+                }
+
+                logger.log(
+                    &name,
+                    LogLine {
+                        timestamp: unix_now(),
+                        stream: stream_type,
+                        text: line_str,
+                    },
+                );
+            }
+        }
+
+        if start < chunk.len() {
+            line_buf.extend_from_slice(&chunk[start..]);
+        }
+    }
+
+    // Flush any trailing line on stream EOF
+    if !line_buf.is_empty() {
+        if line_buf.ends_with(b"\r") {
+            line_buf.pop();
+        }
+        let line_str = String::from_utf8_lossy(&line_buf).into_owned();
+        if let Some(ref path) = log_path {
+            write_and_rotate_log(path, &mut file_sink, &mut bytes_written, &line_str).await;
+        }
+        logger.log(
+            &name,
+            LogLine {
+                timestamp: unix_now(),
+                stream: stream_type,
+                text: line_str,
+            },
+        );
+    }
+}
 
 /// Writes a log line to the file sink and rotates the file when it exceeds 10 MB.
 /// Keeps up to 3 backup files (.1, .2, .3) to prevent unbounded disk usage.
@@ -1197,5 +1280,33 @@ mod tests {
         assert!(is_ignored(Path::new("cache.tmp"), &custom));
         assert!(is_ignored(Path::new("dist/bundle.js"), &custom));
         assert!(!is_ignored(Path::new("src/index.js"), &custom));
+    }
+
+    #[tokio::test]
+    async fn test_stream_process_output_non_utf8() {
+        use std::io::Cursor;
+        let storage = crate::storage::Storage::open_in_memory().unwrap();
+        let logger = LogBus::new(storage);
+        let mut rx = logger.subscribe();
+
+        // Feed invalid UTF-8 byte 0xFF followed by valid text
+        let raw_data = vec![0xFF, b'h', b'e', b'l', b'l', b'o', b'\n'];
+        let cursor = Cursor::new(raw_data);
+
+        stream_process_output(
+            cursor,
+            LogStream::Stdout,
+            "test-proc".to_string(),
+            None,
+            logger,
+        )
+        .await;
+
+        let (name, log_line) = rx.recv().await.unwrap();
+        assert_eq!(name, "test-proc");
+        assert_eq!(log_line.stream, LogStream::Stdout);
+        // \xFF is decoded as Unicode replacement character U+FFFD ()
+        assert!(log_line.text.contains("hello"));
+        assert!(log_line.text.contains('\u{FFFD}'));
     }
 }

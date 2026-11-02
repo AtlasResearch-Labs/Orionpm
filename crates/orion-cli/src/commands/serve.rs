@@ -15,8 +15,8 @@ pub struct ServeArgs {
     #[arg(default_value = "8080")]
     pub port: u16,
 
-    /// Host interface to bind to.
-    #[arg(short = 'H', long, default_value = "0.0.0.0")]
+    /// Host interface to bind to. Defaults to 127.0.0.1 for local security.
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
     pub host: String,
 
     /// Single Page Application (SPA) mode: route not-found requests to index.html.
@@ -97,6 +97,13 @@ async fn handle_http_client(mut stream: TcpStream, root: Arc<PathBuf>, spa: bool
     // URL decode basic path
     let decoded_path = urlencoding_decode(uri_path);
     let clean_rel = decoded_path.trim_start_matches('/');
+
+    // Security check: Block requests for dotfiles/hidden files (.env, .git, .ssh, etc.)
+    if clean_rel.starts_with('.') || clean_rel.contains("/.") || clean_rel.contains("\\.") {
+        let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n403 Forbidden: Access to hidden files is denied";
+        stream.write_all(resp.as_bytes()).await?;
+        return Ok(());
+    }
 
     let target_path = if clean_rel.is_empty() {
         root.join("index.html")

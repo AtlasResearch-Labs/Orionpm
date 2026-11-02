@@ -124,6 +124,11 @@ pub struct AppConfig {
     /// Health check probe configuration for this app (HTTP or TCP).
     #[serde(default)]
     pub health: Option<HealthConfig>,
+
+    /// Grace period in seconds to wait for graceful SIGTERM termination before escalating to SIGKILL.
+    /// Default: 5.
+    #[serde(default = "default_kill_timeout_secs")]
+    pub kill_timeout_secs: u64,
 }
 
 /// Execution mode for a managed process.
@@ -226,6 +231,15 @@ pub struct HealthConfig {
     /// Consecutive failures before restarting (default: 3).
     #[serde(default = "default_health_max_failures")]
     pub max_failures: u32,
+
+    /// Initial grace period in seconds to wait before starting health probes (default: 2s).
+    /// Prevents premature termination of slow-starting JVM, Java, or compilation services.
+    #[serde(default = "default_health_start_period_secs")]
+    pub start_period_secs: u64,
+}
+
+fn default_health_start_period_secs() -> u64 {
+    2
 }
 
 fn default_health_interval_secs() -> u64 {
@@ -255,7 +269,10 @@ fn default_max_restarts() -> u32 {
     10
 }
 fn default_restart_window_secs() -> u64 {
-    60
+    300 // 5 minutes sliding window (prevents flapping crash loop while properly enforcing max_restarts)
+}
+fn default_kill_timeout_secs() -> u64 {
+    5
 }
 fn default_log_lines() -> usize {
     1000
@@ -372,6 +389,33 @@ impl OrionConfig {
         }
 
         errors
+    }
+}
+
+/// Returns the platform-appropriate data directory for orion state and log files.
+pub fn orion_data_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(appdata).join("orion")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("orion")
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.local/share", home)
+        });
+        PathBuf::from(base).join("orion")
     }
 }
 

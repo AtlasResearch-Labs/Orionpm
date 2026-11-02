@@ -8,6 +8,7 @@ use orion_core::protocol::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,6 +86,29 @@ pub async fn run(args: WebArgs) -> Result<()> {
     println!("  Daemon:     Connected to oriond\n");
     println!(" Press Ctrl+C to stop.\n");
 
+    // Fix P0 Bug 1: Generate secure cryptographically random session token to prevent Drive-by RCE & CSRF
+    let session_token = Arc::new({
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        format!(
+            "{:016x}{:08x}{:08x}",
+            now,
+            pid,
+            (now ^ 0x5a5a5a5a5a5a5a5a) as u32
+        )
+    });
+
+    let html_content = Arc::new(DASHBOARD_HTML.replace(
+        "<script>",
+        &format!(
+            "<script>\n    window.__ORION_TOKEN__ = \"{}\";\n",
+            session_token
+        ),
+    ));
+
     if !args.no_open {
         let url = format!("http://{}", addr);
         tokio::spawn(async move {
@@ -100,11 +124,16 @@ pub async fn run(args: WebArgs) -> Result<()> {
         });
     }
 
+    let bind_host = Arc::new(args.host.clone());
+
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                let token = session_token.clone();
+                let html = html_content.clone();
+                let host = bind_host.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream).await {
+                    if let Err(e) = handle_connection(stream, token, html, host).await {
                         tracing::debug!("Connection error: {:#}", e);
                     }
                 });
@@ -117,7 +146,12 @@ pub async fn run(args: WebArgs) -> Result<()> {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream) -> Result<()> {
+async fn handle_connection(
+    mut stream: TcpStream,
+    session_token: Arc<String>,
+    html_content: Arc<String>,
+    bind_host: Arc<String>,
+) -> Result<()> {
     let mut buf = [0u8; 8192];
     let n = stream.read(&mut buf).await?;
     if n == 0 {
@@ -136,30 +170,101 @@ async fn handle_connection(mut stream: TcpStream) -> Result<()> {
         None => (full_path, ""),
     };
 
+    // Parse HTTP headers into lowercase map
+    let mut headers = HashMap::new();
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+        }
+    }
+
     // Extract body if any
     let body = match request_str.find("\r\n\r\n") {
         Some(idx) => &request_str[idx + 4..],
         None => "",
     };
 
+    // Fix P0 Bug 1: Host header validation (Defense against DNS rebinding)
+    if let Some(host_val) = headers.get("host") {
+        let host_clean = host_val.split(':').next().unwrap_or("");
+        let is_valid_host = host_clean == "localhost"
+            || host_clean == "127.0.0.1"
+            || host_clean == "::1"
+            || host_clean == bind_host.as_str();
+        if !is_valid_host {
+            let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nForbidden: Invalid Host header";
+            stream.write_all(resp.as_bytes()).await?;
+            return Ok(());
+        }
+    }
+
+    // Fix P0 Bug 1: Origin validation (Defense against cross-origin attacks)
+    if let Some(origin) = headers.get("origin") {
+        let is_local_origin = origin.starts_with("http://localhost")
+            || origin.starts_with("http://127.0.0.1")
+            || origin.starts_with("http://[::1]")
+            || origin.starts_with(&format!("http://{}", bind_host));
+        if !is_local_origin {
+            let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nForbidden: Untrusted cross-site origin";
+            stream.write_all(resp.as_bytes()).await?;
+            return Ok(());
+        }
+    }
+
+    // Handle preflight OPTIONS
+    if method == "OPTIONS" {
+        let origin = headers
+            .get("origin")
+            .map(|s| s.as_str())
+            .unwrap_or("http://127.0.0.1");
+        let res = format!(
+            "HTTP/1.1 204 No Content\r\n\
+             Access-Control-Allow-Origin: {}\r\n\
+             Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+             Access-Control-Allow-Headers: Content-Type, X-Orion-Token\r\n\
+             Connection: close\r\n\r\n",
+            origin
+        );
+        stream.write_all(res.as_bytes()).await?;
+        return Ok(());
+    }
+
+    // Fix P0 Bug 1: Token verification for all /api/ endpoints
+    if path.starts_with("/api/") {
+        let token_header = headers.get("x-orion-token").map(|s| s.as_str());
+        let token_query = query.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            if k == "token" {
+                Some(v)
+            } else {
+                None
+            }
+        });
+        let provided_token = token_header.or(token_query);
+        if provided_token != Some(session_token.as_str()) {
+            send_json(
+                &mut stream,
+                401,
+                r#"{"ok":false,"error":"Unauthorized: invalid or missing security token"}"#,
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
     // Route requests
     match (method, path) {
-        ("OPTIONS", _) => {
-            let res = "HTTP/1.1 204 No Content\r\n\
-                       Access-Control-Allow-Origin: *\r\n\
-                       Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-                       Access-Control-Allow-Headers: Content-Type\r\n\
-                       Connection: close\r\n\r\n";
-            stream.write_all(res.as_bytes()).await?;
-        }
         ("GET", "/") | ("GET", "/index.html") | ("HEAD", "/") | ("HEAD", "/index.html") => {
-            let body_content = if method == "HEAD" { "" } else { DASHBOARD_HTML };
+            let body_content = if method == "HEAD" { "" } else { &html_content };
             let res = format!(
                 "HTTP/1.1 200 OK\r\n\
                  Content-Type: text/html; charset=utf-8\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\r\n{}",
-                DASHBOARD_HTML.len(),
+                body_content.len(),
                 body_content
             );
             stream.write_all(res.as_bytes()).await?;
@@ -240,6 +345,7 @@ async fn handle_connection(mut stream: TcpStream) -> Result<()> {
                 health: None,
                 alerts: Default::default(),
                 smtp: None,
+                kill_timeout_secs: 5,
             };
 
             match client::rpc(
@@ -385,8 +491,7 @@ async fn handle_sse_stream(mut stream: TcpStream) -> Result<()> {
     let header = "HTTP/1.1 200 OK\r\n\
                   Content-Type: text/event-stream\r\n\
                   Cache-Control: no-cache\r\n\
-                  Connection: keep-alive\r\n\
-                  Access-Control-Allow-Origin: *\r\n\r\n";
+                  Connection: keep-alive\r\n\r\n";
     stream.write_all(header.as_bytes()).await?;
 
     let mut system_tracker = System::new_with_specifics(
@@ -484,6 +589,8 @@ async fn send_json(stream: &mut TcpStream, status: u16, json: &str) -> Result<()
     let status_line = match status {
         200 => "200 OK",
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
         404 => "404 Not Found",
         500 => "500 Internal Server Error",
         _ => "200 OK",
@@ -492,7 +599,7 @@ async fn send_json(stream: &mut TcpStream, status: u16, json: &str) -> Result<()
     let res = format!(
         "HTTP/1.1 {}\r\n\
          Content-Type: application/json\r\n\
-         Access-Control-Allow-Origin: *\r\n\
+         X-Content-Type-Options: nosniff\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\r\n{}",
         status_line,

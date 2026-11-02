@@ -367,6 +367,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
             alerts: Default::default(),
             health: None,
             smtp: None,
+            kill_timeout_secs: 5,
         };
 
         if args.health_http.is_some() || args.health_tcp.is_some() {

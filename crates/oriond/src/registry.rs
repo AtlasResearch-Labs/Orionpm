@@ -497,6 +497,7 @@ mod tests {
             health: None,
             alerts: orion_core::config::AlertConfig::default(),
             smtp: None,
+            kill_timeout_secs: 5,
         }
     }
 

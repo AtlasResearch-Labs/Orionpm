@@ -24,15 +24,9 @@ pub async fn run(storage: Storage, shutdown: CancellationToken) {
                 // so we don't stall the async executor.
                 let result = tokio::task::spawn_blocking(move || {
                     let deleted = storage_clone.prune_logs(KEEP_LINES_PER_PROCESS)?;
-                    // If more than 5,000 lines were pruned or DB file size exceeds 50 MB,
-                    // run VACUUM to reclaim disk space back to the operating system.
-                    let size_mb = storage_clone.db_size_bytes() / (1024 * 1024);
-                    if deleted >= 5_000 || size_mb >= 50 {
-                        tracing::info!(
-                            size_mb = size_mb,
-                            deleted = deleted,
-                            "Running SQLite VACUUM to reclaim disk space"
-                        );
+                    // Fix P0 Bug 7: Only reclaim space when lines were actually removed.
+                    // Uses incremental_vacuum to avoid blocking exclusive locks.
+                    if deleted > 0 {
                         storage_clone.vacuum()?;
                     }
                     Ok::<u64, anyhow::Error>(deleted)

@@ -140,8 +140,16 @@ pub async fn run() -> Result<()> {
     }
     shutdown.cancel();
 
-    // Give supervised processes a grace window before the process exits.
-    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+    // Fix P1 Bug 4: Await children graceful termination (bounded by max kill timeout)
+    // so processes (e.g. game servers, databases) can finish flushing state to disk cleanly.
+    let shutdown_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(7);
+    while tokio::time::Instant::now() < shutdown_deadline {
+        let any_alive = registry.list().into_iter().any(|p| p.state.is_alive());
+        if !any_alive {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
 
     info!("oriond exiting");
     Ok(())

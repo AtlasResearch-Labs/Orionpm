@@ -64,7 +64,22 @@ fn spawn_daemon() -> Result<()> {
         cmd.creation_flags(0x08000000 | 0x00000008 | 0x00000200);
     }
 
-    let log_path = std::env::temp_dir().join("oriond.log");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Fix P1 Bug 9: Detach daemon into its own session so SSH disconnect doesn't kill it
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    // Fix P1 Bug 8: User-scoped log directory instead of shared /tmp/oriond.log
+    let data_dir = orion_core::config::orion_data_dir();
+    std::fs::create_dir_all(&data_dir)?;
+    let log_path = data_dir.join("oriond.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

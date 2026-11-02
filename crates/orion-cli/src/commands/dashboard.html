@@ -851,6 +851,17 @@
   </footer>
 
   <script>
+    // Intercept native fetch to automatically attach X-Orion-Token security header
+    const _originalFetch = window.fetch;
+    window.fetch = function(url, options = {}) {
+      const opts = { ...options };
+      opts.headers = {
+        ...(opts.headers || {}),
+        'X-Orion-Token': window.__ORION_TOKEN__ || ''
+      };
+      return _originalFetch(url, opts);
+    };
+
     let globalProcesses = [];
     let activeLogProcess = null;
     let logPollTimer = null;
@@ -871,7 +882,8 @@
     function initSSE() {
       const connStatus = document.getElementById('connStatus');
       const connText = document.getElementById('connText');
-      const es = new EventSource('/api/events');
+      const tokenParam = window.__ORION_TOKEN__ ? '?token=' + encodeURIComponent(window.__ORION_TOKEN__) : '';
+      const es = new EventSource('/api/events' + tokenParam);
 
       es.onopen = () => {
         connStatus.style.borderColor = 'rgba(16, 185, 129, 0.25)';

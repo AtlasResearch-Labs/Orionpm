@@ -68,9 +68,21 @@ async fn dispatch_request(
         Method::ProcessStart => {
             if let Ok(StartParams { config, name }) = request.parse_params() {
                 let cancel_token = if registry.contains(&name) {
-                    // If process is already registered and running, stop the old one first
+                    // Fix P0 Bug 4: If process is already registered, wait for the old PID
+                    // to exit completely before spawning the replacement to avoid port collisions!
                     if let Some(cancel) = registry.supervisor_cancel(&name) {
                         cancel.cancel();
+                    }
+                    let start_wait = tokio::time::Instant::now();
+                    while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                        let still_alive = registry
+                            .get_state(&name)
+                            .map(|s| s.is_alive())
+                            .unwrap_or(false);
+                        if !still_alive {
+                            break;
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     }
                     registry.update_config(&name, config.clone());
                     registry.reset_cancel_token(&name).unwrap_or_default()
@@ -286,26 +298,80 @@ async fn dispatch_request(
                                 );
                             }
 
-                            // Wait for successor to reach Running state (up to 5s).
-                            let mut waited = 0u64;
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                waited += 100;
-                                let is_up = registry
-                                    .get(&successor_name)
-                                    .map(|p| {
-                                        matches!(
-                                            p.state,
+                            // Fix P0 Bug 3: Verify operational readiness before stopping old instance.
+                            // If health checks are configured, poll the probe until it returns 2xx/3xx.
+                            // If no probe is configured, enforce a 500ms settle delay to ensure no immediate crash.
+                            let mut is_ready = false;
+                            let start_check = tokio::time::Instant::now();
+                            let readiness_timeout = tokio::time::Duration::from_secs(10);
+
+                            while start_check.elapsed() < readiness_timeout {
+                                let state = registry.get_state(&successor_name);
+                                let is_running = matches!(
+                                    state,
+                                    Some(orion_core::process_state::ProcessState::Running { .. })
+                                );
+                                if !is_running {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100))
+                                        .await;
+                                    continue;
+                                }
+
+                                if let Some(ref health) = config.health {
+                                    if let Some(ref http_url) = health.http {
+                                        let client = reqwest::Client::builder()
+                                            .timeout(tokio::time::Duration::from_secs(2))
+                                            .build()
+                                            .unwrap_or_default();
+                                        if let Ok(resp) = client.get(http_url).send().await {
+                                            if resp.status().is_success()
+                                                || resp.status().is_redirection()
+                                            {
+                                                is_ready = true;
+                                                break;
+                                            }
+                                        }
+                                    } else if let Some(ref tcp_addr) = health.tcp {
+                                        if tokio::net::TcpStream::connect(tcp_addr).await.is_ok() {
+                                            is_ready = true;
+                                            break;
+                                        }
+                                    } else {
+                                        is_ready = true;
+                                        break;
+                                    }
+                                } else {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                        .await;
+                                    let still_up = matches!(
+                                        registry.get_state(&successor_name),
+                                        Some(
                                             orion_core::process_state::ProcessState::Running { .. }
                                         )
-                                    })
-                                    .unwrap_or(false);
-                                if is_up || waited >= 5000 {
-                                    break;
+                                    );
+                                    if still_up {
+                                        is_ready = true;
+                                        break;
+                                    }
                                 }
+
+                                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                             }
 
-                            // Stop the old instance gracefully.
+                            if !is_ready {
+                                tracing::warn!(
+                                    successor = %successor_name,
+                                    target = %target_name,
+                                    "Successor failed readiness verification; rolling reload aborted to prevent downtime"
+                                );
+                                if let Some(cancel) = registry.supervisor_cancel(&successor_name) {
+                                    cancel.cancel();
+                                }
+                                registry.remove(&successor_name);
+                                continue;
+                            }
+
+                            // Stop the old instance gracefully now that the successor is verified operational.
                             if let Some(cancel) = registry.supervisor_cancel(target_name) {
                                 cancel.cancel();
                             }

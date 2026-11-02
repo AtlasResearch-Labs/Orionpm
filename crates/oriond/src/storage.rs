@@ -39,13 +39,26 @@ impl Storage {
 
         // Enable WAL mode for better concurrent read performance and
         // reduced contention between the log writer and IPC reader.
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA auto_vacuum=INCREMENTAL;",
+        )?;
 
         let storage = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
         storage.initialize_schema()?;
         tracing::info!(path = %path.display(), "Storage opened");
+        Ok(storage)
+    }
+
+    /// Open an in-memory database (useful for unit testing).
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let storage = Self {
+            conn: Arc::new(Mutex::new(conn)),
+        };
+        storage.initialize_schema()?;
         Ok(storage)
     }
 
@@ -91,8 +104,12 @@ impl Storage {
     // ─── Log operations ────────────────────────────────────────────────────────
 
     /// Insert a log line for a named process.
+    #[allow(dead_code)]
     pub fn insert_log(&self, name: &str, line: &LogLine) -> Result<()> {
-        let conn = self.conn.lock().expect("storage lock poisoned");
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
         let stream = match line.stream {
             LogStream::Stdout => "stdout",
             LogStream::Stderr => "stderr",
@@ -101,6 +118,33 @@ impl Storage {
             "INSERT INTO logs (name, timestamp, stream, text) VALUES (?1, ?2, ?3, ?4)",
             params![name, line.timestamp, stream, line.text],
         )?;
+        Ok(())
+    }
+
+    /// Insert a batch of log lines atomically within a single transaction.
+    /// Fix P0 Bug 7: Dramatically reduces SQLite lock contention and CPU overhead.
+    pub fn insert_logs_batch(&self, batch: &[(String, LogLine)]) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let mut conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO logs (name, timestamp, stream, text) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for (name, line) in batch {
+                let stream = match line.stream {
+                    LogStream::Stdout => "stdout",
+                    LogStream::Stderr => "stderr",
+                };
+                stmt.execute(params![name, line.timestamp, stream, line.text])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -292,16 +336,21 @@ impl Storage {
     // ─── Log size maintenance ──────────────────────────────────────────────────
 
     /// Return the current size of the SQLite database file in bytes.
+    #[allow(dead_code)]
     pub fn db_size_bytes(&self) -> u64 {
         let path = data_dir().join("orion.db");
         std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
     }
 
-    /// Run VACUUM to reclaim disk space after large pruning operations.
-    /// This is a potentially slow operation; only call from a background task.
+    /// Run incremental vacuum to reclaim disk space after large pruning operations.
+    /// Fix P0 Bug 7: Uses incremental_vacuum(500) instead of full VACUUM so it does not
+    /// monopolize the database lock and stall log ingestion.
     pub fn vacuum(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("storage lock poisoned");
-        conn.execute_batch("VACUUM;")?;
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
+        let _ = conn.execute_batch("PRAGMA incremental_vacuum(500);");
         Ok(())
     }
 
@@ -388,28 +437,5 @@ impl Storage {
 
 /// Returns the platform-appropriate data directory for oriond state files.
 fn data_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(appdata).join("orion")
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("orion")
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        // XDG-compliant: respect XDG_DATA_HOME, fall back to ~/.local/share/orion
-        let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.local/share", home)
-        });
-        PathBuf::from(base).join("orion")
-    }
+    orion_core::config::orion_data_dir()
 }

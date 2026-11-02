@@ -564,6 +564,7 @@ fn parse_apps_from_json(
             alerts: AlertConfig::default(),
             health: None,
             smtp: None,
+            kill_timeout_secs: 5,
         };
 
         result.insert(name, app_config);
@@ -724,6 +725,7 @@ mod tests {
                 alerts: AlertConfig::default(),
                 health: None,
                 smtp: None,
+                kill_timeout_secs: 5,
             },
         );
 
