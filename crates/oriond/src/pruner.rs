@@ -23,7 +23,19 @@ pub async fn run(storage: Storage, shutdown: CancellationToken) {
                 // Run the blocking SQLite operation on a dedicated thread
                 // so we don't stall the async executor.
                 let result = tokio::task::spawn_blocking(move || {
-                    storage_clone.prune_logs(KEEP_LINES_PER_PROCESS)
+                    let deleted = storage_clone.prune_logs(KEEP_LINES_PER_PROCESS)?;
+                    // If more than 5,000 lines were pruned or DB file size exceeds 50 MB,
+                    // run VACUUM to reclaim disk space back to the operating system.
+                    let size_mb = storage_clone.db_size_bytes() / (1024 * 1024);
+                    if deleted >= 5_000 || size_mb >= 50 {
+                        tracing::info!(
+                            size_mb = size_mb,
+                            deleted = deleted,
+                            "Running SQLite VACUUM to reclaim disk space"
+                        );
+                        storage_clone.vacuum()?;
+                    }
+                    Ok::<u64, anyhow::Error>(deleted)
                 })
                 .await;
 

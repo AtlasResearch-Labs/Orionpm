@@ -4,6 +4,7 @@ use orion_core::process_state::ProcessState;
 use orion_core::protocol::{LogLine, LogStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -67,6 +68,40 @@ async fn run_supervisor_loop(
     } else {
         None
     };
+
+    // Initialize cron-restart channel if a cron expression is configured.
+    // A background task fires a trigger on each scheduled time, which causes
+    // the supervisor to initiate a clean restart on the next loop iteration.
+    let mut cron_rx: Option<tokio::sync::mpsc::Receiver<()>> =
+        if let Some(ref cron_expr) = config.cron_restart {
+            match cron::Schedule::from_str(
+                // The `cron` crate requires a 6-field or 7-field expression.
+                // Users supply the standard 5-field UNIX cron (min hr dom month dow);
+                // we prepend "0" for seconds to get a 6-field expression.
+                &format!("0 {}", cron_expr.trim()),
+            ) {
+                Ok(schedule) => {
+                    let (tx, rx) = tokio::sync::mpsc::channel(1);
+                    let cron_cancel = cancel_token.clone();
+                    let app_name_cron = name.clone();
+                    tokio::spawn(async move {
+                        run_cron_scheduler(app_name_cron, schedule, tx, cron_cancel).await;
+                    });
+                    Some(rx)
+                }
+                Err(e) => {
+                    warn!(
+                        name = %name,
+                        expr = %cron_expr,
+                        error = %e,
+                        "Invalid cron_restart expression; cron restarts disabled for this app"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
     loop {
         // Check if supervisor was cancelled before starting
@@ -186,8 +221,10 @@ async fn run_supervisor_loop(
                     break;
                 }
 
-                let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
-                let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+                let multiplier = config.restart_backoff_multiplier.max(1.0);
+                let effective_delay_ms = ((config.restart_delay_ms as f64)
+                    * multiplier.powi(restart_count.saturating_sub(1).min(10) as i32))
+                .min(30_000.0) as u64;
 
                 tokio::select! {
                     _ = sleep(Duration::from_millis(effective_delay_ms)) => continue,
@@ -299,6 +336,7 @@ async fn run_supervisor_loop(
         let mut file_change_triggered = false;
         let mut health_failure_triggered = false;
         let mut memory_limit_triggered = false;
+        let mut cron_restart_triggered = false;
 
         let exit_status = tokio::select! {
             biased;
@@ -377,6 +415,27 @@ async fn run_supervisor_loop(
                 file_change_triggered = true;
                 None
             }
+            // Cron-scheduled restart trigger.
+            Some(()) = async {
+                match cron_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                probe_cancel.cancel();
+                info!(name = %name, pid = pid, "Cron-scheduled restart triggered");
+                logger.log(
+                    &name,
+                    LogLine {
+                        timestamp: unix_now(),
+                        stream: LogStream::Stdout,
+                        text: "[orion] Cron-scheduled restart triggered.".to_string(),
+                    },
+                );
+                graceful_terminate_child(&mut child, pid, 4).await;
+                cron_restart_triggered = true;
+                None
+            }
             _ = unhealthy_rx.recv() => {
                 probe_cancel.cancel();
                 let failures = config.health.as_ref().map(|h| h.max_failures).unwrap_or(3);
@@ -413,6 +472,13 @@ async fn run_supervisor_loop(
             continue;
         }
 
+        // Cron-restart: reset counter so the process gets a fresh slate.
+        if cron_restart_triggered {
+            restart_count = 0;
+            restart_timestamps.clear();
+            continue;
+        }
+
         if memory_limit_triggered {
             let now = unix_now();
             if config.restart_window_secs > 0 {
@@ -440,8 +506,10 @@ async fn run_supervisor_loop(
             }
 
             // Exponential backoff
-            let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
-            let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+            let multiplier = config.restart_backoff_multiplier.max(1.0);
+            let effective_delay_ms = ((config.restart_delay_ms as f64)
+                * multiplier.powi(restart_count.saturating_sub(1).min(10) as i32))
+            .min(30_000.0) as u64;
 
             warn!(
                 name = %name,
@@ -604,8 +672,10 @@ async fn run_supervisor_loop(
         }
 
         // Exponential backoff with a cap of 30 seconds
-        let backoff_factor = 1u64 << (restart_count.saturating_sub(1).min(4));
-        let effective_delay_ms = (config.restart_delay_ms * backoff_factor).min(30_000);
+        let multiplier = config.restart_backoff_multiplier.max(1.0);
+        let effective_delay_ms = ((config.restart_delay_ms as f64)
+            * multiplier.powi(restart_count.saturating_sub(1).min(10) as i32))
+        .min(30_000.0) as u64;
 
         warn!(
             name = %name,
@@ -997,6 +1067,45 @@ async fn run_health_probe(
     }
 }
 
+/// Background task that fires on each scheduled cron time and notifies the supervisor
+/// to perform a clean restart. Uses UTC time for scheduling.
+async fn run_cron_scheduler(
+    app_name: String,
+    schedule: cron::Schedule,
+    notify_tx: tokio::sync::mpsc::Sender<()>,
+    cancel_token: CancellationToken,
+) {
+    loop {
+        // Find the next scheduled time after now (UTC).
+        let now_utc = chrono::Utc::now();
+        let next = match schedule.upcoming(chrono::Utc).next() {
+            Some(t) => t,
+            None => {
+                warn!(app = %app_name, "Cron schedule produced no upcoming times; disabling cron restarts");
+                return;
+            }
+        };
+
+        let until_next = (next - now_utc).to_std().unwrap_or(Duration::from_secs(60));
+        info!(
+            app = %app_name,
+            next_restart = %next,
+            secs_until = until_next.as_secs(),
+            "Cron restart scheduled"
+        );
+
+        tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            _ = sleep(until_next) => {
+                if notify_tx.send(()).await.is_err() {
+                    return;
+                }
+                // Brief pause so the supervisor can process the signal before we schedule the next.
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,13 +31,19 @@ pub struct AppConfig {
     /// Human-readable display name. Defaults to the map key (app name).
     pub name: Option<String>,
 
+    /// Optional namespace / group label for this app.
+    /// Used to target multiple apps at once: `orion stop --ns production`.
+    pub namespace: Option<String>,
+
     /// Number of instances to spawn. Use 0 to mean "number of logical CPUs".
     /// Default: 1.
     #[serde(default = "default_instances")]
     pub instances: u32,
 
-    /// Execution mode. Only "cluster" mode applies to Node.js multi-process load balancing.
-    /// All other runtimes must use "fork".
+    /// Execution mode. "fork" launches independent processes (all runtimes).
+    /// "cluster" is accepted as an alias for "fork" — each instance runs as an
+    /// independent process; shared-port kernel load balancing requires SO_REUSEPORT
+    /// on the listening socket in the application itself.
     #[serde(default)]
     pub mode: ExecutionMode,
 
@@ -53,6 +59,12 @@ pub struct AppConfig {
     #[serde(default = "default_restart_delay_ms")]
     pub restart_delay_ms: u64,
 
+    /// Multiplier applied to restart_delay_ms on each successive failure.
+    /// e.g. 2.0 doubles the delay each time (exponential backoff).
+    /// Capped at 30 000 ms. Default: 2.0.
+    #[serde(default = "default_restart_backoff_multiplier")]
+    pub restart_backoff_multiplier: f64,
+
     /// Maximum number of restarts before oriond stops trying. 0 means unlimited.
     /// Default: 10.
     #[serde(default = "default_max_restarts")]
@@ -63,6 +75,10 @@ pub struct AppConfig {
     /// Default: 60.
     #[serde(default = "default_restart_window_secs")]
     pub restart_window_secs: u64,
+
+    /// Cron expression for scheduled automatic restarts (e.g. "0 3 * * *" = 03:00 daily).
+    /// Uses UTC time. Leave None to disable. Default: None.
+    pub cron_restart: Option<String>,
 
     /// Watch source paths for file changes and auto-restart on change.
     #[serde(default)]
@@ -118,8 +134,10 @@ pub enum ExecutionMode {
     #[default]
     Fork,
 
-    /// Node.js cluster module for multi-process load balancing.
-    /// Only valid when command resolves to a Node.js runtime.
+    /// Accepted alias for Fork. Each instance is an independent process.
+    /// Shared-port load balancing requires SO_REUSEPORT in the application.
+    /// For Node.js cluster semantics with a shared IPC socket, see the
+    /// Orion roadmap — kernel-level cluster mode is planned for a future release.
     Cluster,
 }
 
@@ -230,6 +248,9 @@ fn default_instances() -> u32 {
 fn default_restart_delay_ms() -> u64 {
     1000
 }
+fn default_restart_backoff_multiplier() -> f64 {
+    2.0
+}
 fn default_max_restarts() -> u32 {
     10
 }
@@ -300,11 +321,44 @@ impl OrionConfig {
                 ));
             }
 
+            if app.mode == ExecutionMode::Cluster {
+                errors.push(format!(
+                    "[app.{}] WARNING: cluster mode spawns independent fork processes — each instance must bind a \
+                     different port OR enable SO_REUSEPORT. Full kernel-level shared-port load balancing \
+                     is planned for a future release.",
+                    key
+                ));
+            }
+
+            if app.restart_backoff_multiplier < 1.0 {
+                errors.push(format!(
+                    "[app.{}] restart_backoff_multiplier must be >= 1.0 (got {})",
+                    key, app.restart_backoff_multiplier
+                ));
+            }
+
             if app.max_cpu_pct > 100.0 {
                 errors.push(format!(
                     "[app.{}] max_cpu_pct cannot exceed 100.0 (got {})",
                     key, app.max_cpu_pct
                 ));
+            }
+
+            if let Some(ref cron_expr) = app.cron_restart {
+                if cron_expr.trim().is_empty() {
+                    errors.push(format!(
+                        "[app.{}] cron_restart must not be an empty string",
+                        key
+                    ));
+                }
+                // Basic 5-field cron format check (fields separated by spaces)
+                let field_count = cron_expr.split_whitespace().count();
+                if field_count != 5 {
+                    errors.push(format!(
+                        "[app.{}] cron_restart '{}' must have exactly 5 fields (min hour dom month dow)",
+                        key, cron_expr
+                    ));
+                }
             }
 
             if let Some(ref email) = app.alerts.on_crash_email {
@@ -419,5 +473,39 @@ mod tests {
         let headers = health.headers.as_ref().expect("headers missing");
         assert_eq!(headers.get("Authorization"), Some(&"secret123".to_string()));
         assert_eq!(headers.get("X-Custom-Header"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn parse_cron_and_namespace_config() {
+        let raw = r#"
+            [app.batch]
+            command = "python sync.py"
+            namespace = "data-pipeline"
+            cron_restart = "0 2 * * *"
+            restart_backoff_multiplier = 1.5
+        "#;
+        let config = OrionConfig::from_str(raw).expect("parse failed");
+        let app = config.apps.get("batch").expect("app not found");
+        assert_eq!(app.namespace.as_deref(), Some("data-pipeline"));
+        assert_eq!(app.cron_restart.as_deref(), Some("0 2 * * *"));
+        assert_eq!(app.restart_backoff_multiplier, 1.5);
+        assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_catches_invalid_cron() {
+        let raw = r#"
+            [app.batch]
+            command = "python sync.py"
+            cron_restart = "invalid cron format"
+        "#;
+        let config = OrionConfig::from_str(raw).expect("parse failed");
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("must have exactly 5 fields")),
+            "expected cron validation error"
+        );
     }
 }

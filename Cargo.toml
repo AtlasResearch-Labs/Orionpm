@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.9"
+version = "0.2.0"
 authors = ["Atlas Research Labs <dev@atlasresearchlabs.online>"]
 edition = "2021"
 license = "MIT"
@@ -64,3 +64,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # TUI
 ratatui = "0.27"
 crossterm = "0.27"
+
+# Date/time (used by cron scheduler)
+chrono = { version = "0.4", features = ["clock"] }

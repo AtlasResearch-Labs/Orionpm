@@ -74,6 +74,18 @@ pub async fn run() -> Result<()> {
         }
     }
 
+    // ── Stable IDs: seed next_id from persisted counter before registering ────
+    // This ensures numeric process IDs are stable across daemon restarts —
+    // a process that was ID 3 before a daemon restart will still be ID 3 after.
+    let persisted_next_id = storage.load_next_id();
+    if persisted_next_id > 0 {
+        registry.restore_next_id(persisted_next_id);
+        info!(
+            next_id = persisted_next_id,
+            "Restored stable process ID counter"
+        );
+    }
+
     // ── Fix Issue 2: Restore saved processes ONLY after IPC is bound ──────────
     let saved_processes = storage.load_saved_processes().unwrap_or_default();
     if saved_processes.is_empty() {
@@ -96,6 +108,8 @@ pub async fn run() -> Result<()> {
                 info!(name = %name, "Process restored");
             }
         }
+        // Persist the updated next_id so future restarts continue from the correct slot.
+        let _ = storage.save_next_id(registry.current_next_id());
     }
 
     info!("oriond ready");

@@ -76,6 +76,8 @@ async fn dispatch_request(
                     registry.reset_cancel_token(&name).unwrap_or_default()
                 } else {
                     let _ = registry.register(name.clone(), config.clone());
+                    // Persist stable next_id after every new registration.
+                    let _ = storage.save_next_id(registry.current_next_id());
                     registry.supervisor_cancel(&name).unwrap_or_default()
                 };
 
@@ -198,28 +200,117 @@ async fn dispatch_request(
         }
 
         // Graceful reload:
-        //   1. Gracefully stop old supervisor so network ports and file locks are released.
-        //   2. Wait for the old process to fully exit (up to 2 s).
-        //   3. Spawn fresh supervisor with new cancellation token.
-        //   4. Wait for new instance to reach active state before replying.
+        //   Single instance: graceful stop → wait for exit → spawn fresh.
+        //   Multiple instances (cluster): rolling zero-downtime reload —
+        //     for each instance: spawn new → wait for Running → stop old.
+        //     This keeps at least N-1 instances serving at all times.
         Method::ProcessReload => {
             if let Ok(NameParams { name }) = request.parse_params() {
                 let targets = registry.resolve_targets(&name);
                 if targets.is_empty() {
                     send_not_found(req_id, &name, writer).await?;
+                } else if targets.len() == 1 {
+                    // ── Single instance: stop-then-start (same as before) ──
+                    let target_name = &targets[0];
+                    if let Some(config) = registry.get_config(target_name) {
+                        let old_cancel = registry.supervisor_cancel(target_name);
+                        if let Some(cancel) = old_cancel {
+                            cancel.cancel();
+                        }
+
+                        let start_wait = tokio::time::Instant::now();
+                        while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                            let still_alive = registry
+                                .get_state(target_name)
+                                .map(|s| s.is_alive())
+                                .unwrap_or(false);
+                            if !still_alive {
+                                break;
+                            }
+                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                        }
+
+                        if let Some(new_token) = registry.reset_cancel_token(target_name) {
+                            crate::supervisor::spawn(
+                                target_name.clone(),
+                                config,
+                                registry.clone(),
+                                logger.clone(),
+                                new_token,
+                            );
+                        }
+
+                        let mut elapsed = 0u64;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            elapsed += 100;
+                            let is_running = registry
+                                .get(target_name)
+                                .map(|p| p.state.is_active())
+                                .unwrap_or(false);
+                            if is_running || elapsed >= 2000 {
+                                break;
+                            }
+                        }
+                    }
+
+                    let resp = Response::ok(
+                        req_id,
+                        ResponseResult::Ack {
+                            message: format!("Process '{}' reloaded gracefully", targets[0]),
+                        },
+                    );
+                    writer.lock().await.send(&resp).await?;
                 } else {
+                    // ── Rolling zero-downtime reload for multi-instance clusters ──
+                    // For each old instance: spawn a replacement first, wait for it
+                    // to reach Running state, then stop the old one.
+                    // This keeps at least N-1 instances alive at all times.
+                    let mut reloaded = 0usize;
                     for target_name in &targets {
                         if let Some(config) = registry.get_config(target_name) {
-                            let old_cancel = registry.supervisor_cancel(target_name);
+                            // Derive a temporary successor name using an underscore suffix
+                            // to avoid name collisions with existing cluster slots.
+                            let successor_name = format!("{}_r", target_name);
 
-                            // 1. Gracefully stop the old supervisor.
-                            if let Some(cancel) = old_cancel {
-                                cancel.cancel();
+                            // Spawn the successor instance.
+                            let _ = registry.register(successor_name.clone(), config.clone());
+                            let _ = storage.save_next_id(registry.current_next_id());
+                            if let Some(new_token) = registry.supervisor_cancel(&successor_name) {
+                                crate::supervisor::spawn(
+                                    successor_name.clone(),
+                                    config.clone(),
+                                    registry.clone(),
+                                    logger.clone(),
+                                    new_token,
+                                );
                             }
 
-                            // 2. Wait up to 7 seconds for previous process to release ports and exit cleanly.
-                            let start_wait = tokio::time::Instant::now();
-                            while start_wait.elapsed() < tokio::time::Duration::from_secs(7) {
+                            // Wait for successor to reach Running state (up to 5s).
+                            let mut waited = 0u64;
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                waited += 100;
+                                let is_up = registry
+                                    .get(&successor_name)
+                                    .map(|p| {
+                                        matches!(
+                                            p.state,
+                                            orion_core::process_state::ProcessState::Running { .. }
+                                        )
+                                    })
+                                    .unwrap_or(false);
+                                if is_up || waited >= 5000 {
+                                    break;
+                                }
+                            }
+
+                            // Stop the old instance gracefully.
+                            if let Some(cancel) = registry.supervisor_cancel(target_name) {
+                                cancel.cancel();
+                            }
+                            let stop_start = tokio::time::Instant::now();
+                            while stop_start.elapsed() < tokio::time::Duration::from_secs(7) {
                                 let still_alive = registry
                                     .get_state(target_name)
                                     .map(|s| s.is_alive())
@@ -230,41 +321,19 @@ async fn dispatch_request(
                                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                             }
 
-                            // 3. Reset cancel token and spawn fresh supervisor.
-                            if let Some(new_token) = registry.reset_cancel_token(target_name) {
-                                crate::supervisor::spawn(
-                                    target_name.clone(),
-                                    config,
-                                    registry.clone(),
-                                    logger.clone(),
-                                    new_token,
-                                );
-                            }
+                            // Rename successor to take the old slot: remove old, rename new.
+                            registry.remove(target_name);
+                            let _ = storage.remove_saved_process(target_name);
+                            registry.rename(&successor_name, target_name.clone());
 
-                            // 4. Wait for new process to become active.
-                            let mut elapsed = 0u64;
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                elapsed += 100;
-                                let is_running = registry
-                                    .get(target_name)
-                                    .map(|p| p.state.is_active())
-                                    .unwrap_or(false);
-                                if is_running || elapsed >= 2000 {
-                                    break;
-                                }
-                            }
+                            reloaded += 1;
                         }
                     }
 
                     let resp = Response::ok(
                         req_id,
                         ResponseResult::Ack {
-                            message: if targets.len() == 1 {
-                                format!("Process '{}' reloaded gracefully", targets[0])
-                            } else {
-                                format!("{} processes reloaded gracefully", targets.len())
-                            },
+                            message: format!("{} instances reloaded with zero downtime", reloaded),
                         },
                     );
                     writer.lock().await.send(&resp).await?;

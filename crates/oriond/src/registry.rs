@@ -45,6 +45,7 @@ impl ProcessHandle {
         ProcessInfo {
             id: self.id,
             name: self.name.clone(),
+            namespace: self.config.namespace.clone(),
             state: self.state.clone(),
             restart_count: self.restart_count,
             registered_at: self.registered_at,
@@ -111,6 +112,20 @@ impl ProcessRegistry {
         );
 
         id
+    }
+
+    /// Seed the next_id counter from a persisted value (called once at daemon startup).
+    /// This ensures numeric process IDs are stable across daemon restarts.
+    pub fn restore_next_id(&self, next_id: u32) {
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if next_id > inner.next_id {
+            inner.next_id = next_id;
+        }
+    }
+
+    /// Return the current next_id counter value (for persisting after each registration).
+    pub fn current_next_id(&self) -> u32 {
+        self.inner.read().expect("registry lock poisoned").next_id
     }
 
     /// Update the state of a named process.
@@ -190,6 +205,20 @@ impl ProcessRegistry {
     pub fn remove(&self, name: &str) -> bool {
         let mut inner = self.inner.write().expect("registry lock poisoned");
         inner.processes.remove(name).is_some()
+    }
+
+    /// Rename a process in the registry (used during rolling reload to swap
+    /// the successor into the old slot). The handle's name field is updated too.
+    /// Returns false if the source name was not found.
+    pub fn rename(&self, from: &str, to: String) -> bool {
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if let Some(mut handle) = inner.processes.remove(from) {
+            handle.name = to.clone();
+            inner.processes.insert(to, handle);
+            true
+        } else {
+            false
+        }
     }
 
     /// Retrieve the config of a named process.
@@ -277,6 +306,19 @@ impl ProcessRegistry {
         if !matches.is_empty() {
             matches.sort();
             return matches;
+        }
+
+        // Namespace match: e.g. "ns:production" or matching configured app namespace directly
+        let ns_target = target.strip_prefix("ns:").unwrap_or(target);
+        let mut ns_matches: Vec<String> = inner
+            .processes
+            .values()
+            .filter(|h| h.config.namespace.as_deref() == Some(ns_target))
+            .map(|h| h.name.clone())
+            .collect();
+        if !ns_matches.is_empty() {
+            ns_matches.sort();
+            return ns_matches;
         }
 
         Vec::new()
@@ -427,13 +469,16 @@ mod tests {
             args: vec!["100".to_string()],
             cwd: None,
             name: Some("dummy".to_string()),
+            namespace: None,
             instances: 1,
             mode: orion_core::config::ExecutionMode::Fork,
             env: std::collections::HashMap::new(),
             restart_policy: orion_core::config::RestartPolicy::Always,
             restart_delay_ms: 1000,
+            restart_backoff_multiplier: 2.0,
             max_restarts: 10,
             restart_window_secs: 0,
+            cron_restart: None,
             watch: false,
             watch_paths: Vec::new(),
             watch_ignore: Vec::new(),
@@ -505,5 +550,53 @@ mod tests {
         // "all" resolves everything sorted
         let all = registry.resolve_targets("all");
         assert_eq!(all, vec!["api", "web", "web-1", "web-2"]);
+    }
+
+    #[test]
+    fn test_resolve_targets_namespace_matching() {
+        let registry = ProcessRegistry::new();
+        let mut cfg1 = dummy_config();
+        cfg1.namespace = Some("prod".to_string());
+        let mut cfg2 = dummy_config();
+        cfg2.namespace = Some("prod".to_string());
+        let mut cfg3 = dummy_config();
+        cfg3.namespace = Some("staging".to_string());
+
+        registry.register("api".to_string(), cfg1);
+        registry.register("worker".to_string(), cfg2);
+        registry.register("test-app".to_string(), cfg3);
+
+        // Matching with "ns:prod"
+        let prod_targets = registry.resolve_targets("ns:prod");
+        assert_eq!(prod_targets, vec!["api", "worker"]);
+
+        // Matching with "prod" directly
+        let direct_targets = registry.resolve_targets("prod");
+        assert_eq!(direct_targets, vec!["api", "worker"]);
+
+        // Matching with "staging"
+        let staging_targets = registry.resolve_targets("ns:staging");
+        assert_eq!(staging_targets, vec!["test-app"]);
+    }
+
+    #[test]
+    fn test_rename_and_stable_id() {
+        let registry = ProcessRegistry::new();
+        registry.restore_next_id(100);
+        let id1 = registry.register("app_r".to_string(), dummy_config());
+        assert_eq!(id1, 100);
+        assert_eq!(registry.current_next_id(), 101);
+
+        assert!(registry.contains("app_r"));
+        assert!(!registry.contains("app"));
+
+        let renamed = registry.rename("app_r", "app".to_string());
+        assert!(renamed);
+        assert!(registry.contains("app"));
+        assert!(!registry.contains("app_r"));
+
+        let handle = registry.get("app").expect("should exist");
+        assert_eq!(handle.name, "app");
+        assert_eq!(handle.id, 100);
     }
 }

@@ -77,6 +77,10 @@ pub struct ProcessInfo {
     /// The name key from the config (or the --name flag).
     pub name: String,
 
+    /// Optional namespace / group label for this process.
+    #[serde(default)]
+    pub namespace: Option<String>,
+
     /// The state of the process at the time of this snapshot.
     pub state: ProcessState,
 
@@ -195,6 +199,7 @@ mod tests {
         let mut info = ProcessInfo {
             id: 0,
             name: "test".to_string(),
+            namespace: None,
             state: ProcessState::Running { pid: 1 },
             restart_count: 0,
             registered_at: 0,

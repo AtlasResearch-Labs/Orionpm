@@ -76,6 +76,12 @@ impl Storage {
                 restart_count  INTEGER NOT NULL DEFAULT 0,
                 registered_at  INTEGER NOT NULL
             );
+
+            -- Key/value metadata table for daemon-level state (e.g. next_id counter).
+            CREATE TABLE IF NOT EXISTS daemon_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         ",
         )?;
 
@@ -253,6 +259,50 @@ impl Storage {
         let conn = self.conn.lock().expect("storage lock poisoned");
         let deleted = conn.execute("DELETE FROM logs", [])?;
         Ok(deleted as u64)
+    }
+
+    // ─── Stable numeric ID persistence ────────────────────────────────────────
+
+    /// Load the persisted next_id counter from the database.
+    /// Returns 0 if never saved (fresh install).
+    pub fn load_next_id(&self) -> u32 {
+        let conn = self.conn.lock().expect("storage lock poisoned");
+        // The daemon_meta table may not exist on older DB versions — tolerate that.
+        conn.query_row(
+            "SELECT value FROM daemon_meta WHERE key = 'next_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0)
+    }
+
+    /// Persist the next_id counter so numeric process IDs survive daemon restarts.
+    pub fn save_next_id(&self, next_id: u32) -> Result<()> {
+        let conn = self.conn.lock().expect("storage lock poisoned");
+        conn.execute(
+            "INSERT INTO daemon_meta (key, value) VALUES ('next_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![next_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    // ─── Log size maintenance ──────────────────────────────────────────────────
+
+    /// Return the current size of the SQLite database file in bytes.
+    pub fn db_size_bytes(&self) -> u64 {
+        let path = data_dir().join("orion.db");
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Run VACUUM to reclaim disk space after large pruning operations.
+    /// This is a potentially slow operation; only call from a background task.
+    pub fn vacuum(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("storage lock poisoned");
+        conn.execute_batch("VACUUM;")?;
+        Ok(())
     }
 
     // ─── Process state persistence (save / restore) ────────────────────────────

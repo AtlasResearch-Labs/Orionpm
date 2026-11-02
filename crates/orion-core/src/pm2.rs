@@ -493,18 +493,36 @@ fn parse_apps_from_json(root: &Value, source_path: &Path) -> Result<HashMap<Stri
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as u32;
 
+        let namespace = app_val
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let cron_restart = app_val
+            .get("cron_restart")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let restart_backoff_multiplier = app_val
+            .get("restart_backoff_multiplier")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(2.0);
+
         let app_config = AppConfig {
             command,
             args,
             cwd,
             name: Some(name.clone()),
+            namespace,
             instances,
             mode,
             env,
             restart_policy,
             restart_delay_ms,
+            restart_backoff_multiplier,
             max_restarts,
             restart_window_secs: 60,
+            cron_restart,
             watch,
             watch_paths,
             watch_ignore,
@@ -655,13 +673,16 @@ mod tests {
                 args: vec!["worker.py".to_string()],
                 cwd: None,
                 name: Some("worker".to_string()),
+                namespace: None,
                 instances: 1,
                 mode: ExecutionMode::Fork,
                 env: HashMap::new(),
                 restart_policy: RestartPolicy::Always,
                 restart_delay_ms: 1000,
+                restart_backoff_multiplier: 2.0,
                 max_restarts: 10,
                 restart_window_secs: 60,
+                cron_restart: None,
                 watch: false,
                 watch_paths: vec![PathBuf::from(".")],
                 watch_ignore: vec![],

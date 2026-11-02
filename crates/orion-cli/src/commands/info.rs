@@ -45,8 +45,17 @@ pub async fn run(args: InfoArgs) -> Result<()> {
             None => "-".to_string(),
         };
 
+        let pid_str = match &process.state {
+            orion_core::process_state::ProcessState::Running { pid } => pid.to_string(),
+            _ => "-".to_string(),
+        };
+
         println!("Process Details: {}", process.name);
         println!("  ID:            {}", process.id);
+        println!("  PID:           {}", pid_str);
+        if let Some(ref ns) = process.namespace {
+            println!("  Namespace:     {}", ns);
+        }
         println!("  Status:        {}", process.state.label());
         println!("  Mode:          {}", process.mode);
         println!("  Command:       {}", process.command);

@@ -25,6 +25,9 @@ pub async fn run(args: ReloadArgs) -> Result<()> {
         return super::start::run(super::start::StartArgs {
             target: args.target,
             name: None,
+            namespace: None,
+            cron: None,
+            exp_backoff: None,
             instances: None,
             watch: false,
             watch_paths: Vec::new(),

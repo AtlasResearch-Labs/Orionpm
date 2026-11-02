@@ -19,6 +19,18 @@ pub struct StartArgs {
     #[arg(long)]
     pub name: Option<String>,
 
+    /// Namespace / group name for the process (e.g. "production", "worker").
+    #[arg(long, short = 'n', alias = "ns")]
+    pub namespace: Option<String>,
+
+    /// Cron expression for automatic restart schedule (e.g. "0 3 * * *").
+    #[arg(long = "cron")]
+    pub cron: Option<String>,
+
+    /// Exponential backoff multiplier on restart failures (default: 2.0).
+    #[arg(long = "exp-backoff")]
+    pub exp_backoff: Option<f64>,
+
     /// Number of instances to spawn. Overrides the config file value.
     #[arg(long, short = 'i')]
     pub instances: Option<u32>,
@@ -97,6 +109,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
             if let Some(i) = args.instances {
                 app_config.instances = i;
             }
+            if let Some(ref ns) = args.namespace {
+                app_config.namespace = Some(ns.clone());
+            }
+            if let Some(ref cron) = args.cron {
+                app_config.cron_restart = Some(cron.clone());
+            }
+            if let Some(mult) = args.exp_backoff {
+                app_config.restart_backoff_multiplier = mult;
+            }
             if let Some(ref m) = args.max_memory {
                 if let Some(mb) = parse_memory_string(m) {
                     app_config.max_memory_mb = mb;
@@ -149,6 +170,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
             if let Some(i) = args.instances {
                 app_config.instances = i;
             }
+            if let Some(ref ns) = args.namespace {
+                app_config.namespace = Some(ns.clone());
+            }
+            if let Some(ref cron) = args.cron {
+                app_config.cron_restart = Some(cron.clone());
+            }
+            if let Some(mult) = args.exp_backoff {
+                app_config.restart_backoff_multiplier = mult;
+            }
             if let Some(ref m) = args.max_memory {
                 if let Some(mb) = parse_memory_string(m) {
                     app_config.max_memory_mb = mb;
@@ -200,6 +230,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
             }
             if let Some(i) = args.instances {
                 app_config.instances = i;
+            }
+            if let Some(ref ns) = args.namespace {
+                app_config.namespace = Some(ns.clone());
+            }
+            if let Some(ref cron) = args.cron {
+                app_config.cron_restart = Some(cron.clone());
+            }
+            if let Some(mult) = args.exp_backoff {
+                app_config.restart_backoff_multiplier = mult;
             }
             if let Some(ref m) = args.max_memory {
                 if let Some(mb) = parse_memory_string(m) {
@@ -281,6 +320,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
             args: cmd_args,
             cwd: effective_cwd,
             name: Some(app_name.clone()),
+            namespace: args.namespace.clone(),
             instances: args.instances.unwrap_or(1),
             mode: ExecutionMode::Fork,
             env: env_map,
@@ -290,8 +330,10 @@ pub async fn run(args: StartArgs) -> Result<()> {
                 RestartPolicy::Always
             },
             restart_delay_ms: 1000,
+            restart_backoff_multiplier: args.exp_backoff.unwrap_or(2.0),
             max_restarts: 10,
             restart_window_secs: 60,
+            cron_restart: args.cron.clone(),
             watch: args.watch || !args.watch_paths.is_empty(),
             watch_paths,
             watch_ignore: vec![
