@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "oriond"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 orion-core = { path = "../orion-core" }

@@ -1208,6 +1208,7 @@ dependencies = [
  "clap",
  "crossterm",
  "interprocess",
+ "libc",
  "orion-core",
  "orion-ipc",
  "oriond",

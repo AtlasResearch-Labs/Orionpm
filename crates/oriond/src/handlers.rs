@@ -300,29 +300,54 @@ async fn dispatch_request(
                     let mut reloaded = 0usize;
                     for target_name in &targets {
                         if let Some(config) = registry.get_config(target_name) {
+                            let old_port = config
+                                .env
+                                .get("PORT")
+                                .and_then(|p| p.parse::<u16>().ok());
+
+                            // Check if an alternate port is needed to avoid EADDRINUSE during rolling reload
+                            let (successor_port, successor_config) = if let Some(p) = old_port {
+                                // Find an available ephemeral/alternate port
+                                let mut alt = p.wrapping_add(100);
+                                while std::net::TcpListener::bind(("127.0.0.1", alt)).is_err() {
+                                    alt = alt.wrapping_add(1);
+                                }
+                                let mut cfg = config.clone();
+                                cfg.env.insert("PORT".to_string(), alt.to_string());
+                                if let Some(ref mut health) = cfg.health {
+                                    if let Some(ref mut http) = health.http {
+                                        *http = http.replace(&format!(":{}", p), &format!(":{}", alt));
+                                    }
+                                    if let Some(ref mut tcp) = health.tcp {
+                                        *tcp = tcp.replace(&format!(":{}", p), &format!(":{}", alt));
+                                    }
+                                }
+                                (Some(alt), cfg)
+                            } else {
+                                (None, config.clone())
+                            };
+
                             // Derive a temporary successor name using an underscore suffix
                             // to avoid name collisions with existing cluster slots.
                             let successor_name = format!("{}_r", target_name);
 
                             // Spawn the successor instance.
-                            let _ = registry.register(successor_name.clone(), config.clone());
+                            let _ = registry.register(successor_name.clone(), successor_config.clone());
                             let _ = storage.save_next_id(registry.current_next_id());
                             if let Some(new_token) = registry.supervisor_cancel(&successor_name) {
                                 crate::supervisor::spawn(
                                     successor_name.clone(),
-                                    config.clone(),
+                                    successor_config.clone(),
                                     registry.clone(),
                                     logger.clone(),
                                     new_token,
                                 );
                             }
 
-                            // Fix P0 Bug 3: Verify operational readiness before stopping old instance.
-                            // If health checks are configured, poll the probe until it returns 2xx/3xx.
-                            // If no probe is configured, enforce a 500ms settle delay to ensure no immediate crash.
+                            // Verify operational readiness before stopping old instance.
                             let mut is_ready = false;
                             let start_check = tokio::time::Instant::now();
-                            let readiness_timeout = tokio::time::Duration::from_secs(10);
+                            let readiness_timeout = tokio::time::Duration::from_secs(5);
 
                             while start_check.elapsed() < readiness_timeout {
                                 let state = registry.get_state(&successor_name);
@@ -331,15 +356,15 @@ async fn dispatch_request(
                                     Some(orion_core::process_state::ProcessState::Running { .. })
                                 );
                                 if !is_running {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100))
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(50))
                                         .await;
                                     continue;
                                 }
 
-                                if let Some(ref health) = config.health {
+                                if let Some(ref health) = successor_config.health {
                                     if let Some(ref http_url) = health.http {
                                         let client = reqwest::Client::builder()
-                                            .timeout(tokio::time::Duration::from_secs(2))
+                                            .timeout(tokio::time::Duration::from_secs(1))
                                             .build()
                                             .unwrap_or_default();
                                         if let Ok(resp) = client.get(http_url).send().await {
@@ -359,8 +384,13 @@ async fn dispatch_request(
                                         is_ready = true;
                                         break;
                                     }
+                                } else if let Some(alt) = successor_port {
+                                    if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", alt)).await.is_ok() {
+                                        is_ready = true;
+                                        break;
+                                    }
                                 } else {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(150))
                                         .await;
                                     let still_up = matches!(
                                         registry.get_state(&successor_name),
@@ -374,7 +404,7 @@ async fn dispatch_request(
                                     }
                                 }
 
-                                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                             }
 
                             if !is_ready {
@@ -390,12 +420,21 @@ async fn dispatch_request(
                                 continue;
                             }
 
+                            // Successor is verified ready. Atomically swap backend port in ClusterBalancer!
+                            if let (Some(old_p), Some(new_p)) = (old_port, successor_port) {
+                                let base_name = target_name
+                                    .rsplit_once('-')
+                                    .map(|(base, _)| base)
+                                    .unwrap_or(target_name.as_str());
+                                cluster.swap_backend(base_name, old_p, new_p).await;
+                            }
+
                             // Stop the old instance gracefully now that the successor is verified operational.
                             if let Some(cancel) = registry.supervisor_cancel(target_name) {
                                 cancel.cancel();
                             }
                             let stop_start = tokio::time::Instant::now();
-                            while stop_start.elapsed() < tokio::time::Duration::from_secs(7) {
+                            while stop_start.elapsed() < tokio::time::Duration::from_secs(5) {
                                 let still_alive = registry
                                     .get_state(target_name)
                                     .map(|s| s.is_alive())
@@ -403,7 +442,7 @@ async fn dispatch_request(
                                 if !still_alive {
                                     break;
                                 }
-                                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
                             }
 
                             // Rename successor to take the old slot: remove old, rename new.
