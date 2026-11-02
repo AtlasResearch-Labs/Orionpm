@@ -1202,7 +1202,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orion-cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1210,6 +1210,7 @@ dependencies = [
  "interprocess",
  "orion-core",
  "orion-ipc",
+ "oriond",
  "ratatui",
  "serde",
  "serde_json",
@@ -1223,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "orion-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1234,7 +1235,7 @@ dependencies = [
 
 [[package]]
 name = "orion-ipc"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "interprocess",
@@ -1250,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "oriond"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1274,6 +1275,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

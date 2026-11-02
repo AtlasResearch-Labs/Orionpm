@@ -42,6 +42,7 @@ pub async fn run(args: ReloadArgs) -> Result<()> {
             health_tcp: None,
             health_interval: None,
             health_max_failures: None,
+            port: None,
         })
         .await;
     }

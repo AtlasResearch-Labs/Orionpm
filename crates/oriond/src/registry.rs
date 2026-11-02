@@ -85,6 +85,12 @@ struct RegistryInner {
     next_id: u32,
 }
 
+impl Default for ProcessRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessRegistry {
     pub fn new() -> Self {
         Self {
@@ -498,6 +504,7 @@ mod tests {
             alerts: orion_core::config::AlertConfig::default(),
             smtp: None,
             kill_timeout_secs: 5,
+            port: None,
         }
     }
 

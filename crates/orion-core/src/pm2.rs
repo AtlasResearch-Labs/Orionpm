@@ -538,6 +538,8 @@ fn parse_apps_from_json(
             .and_then(|v| v.as_f64())
             .unwrap_or(2.0);
 
+        let port = env.get("PORT").and_then(|p| p.parse::<u16>().ok());
+
         let app_config = AppConfig {
             command,
             args,
@@ -565,6 +567,7 @@ fn parse_apps_from_json(
             health: None,
             smtp: None,
             kill_timeout_secs: 5,
+            port,
         };
 
         result.insert(name, app_config);
@@ -726,6 +729,7 @@ mod tests {
                 health: None,
                 smtp: None,
                 kill_timeout_secs: 5,
+                port: None,
             },
         );
 

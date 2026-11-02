@@ -7,6 +7,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "oriond"
+path = "src/lib.rs"
+
 [[bin]]
 name = "oriond"
 path = "src/main.rs"
@@ -35,3 +39,12 @@ libc = { workspace = true }
 fs2 = "0.4"
 cron = "0.12"
 chrono = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_JobObjects",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_Security"
+] }
+

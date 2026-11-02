@@ -38,6 +38,8 @@ pub async fn run() -> Result<()> {
     let ipc_registry = registry.clone();
     let ipc_storage = storage.clone();
     let ipc_logger = logger.clone();
+    let cluster_registry = crate::cluster::ClusterRegistry::new();
+    let ipc_cluster = cluster_registry.clone();
     let ipc_ready = tokio::sync::oneshot::channel::<std::result::Result<(), String>>();
     let (ipc_ready_tx, ipc_ready_rx) = ipc_ready;
 
@@ -46,6 +48,7 @@ pub async fn run() -> Result<()> {
             ipc_registry,
             ipc_storage,
             ipc_logger,
+            ipc_cluster,
             ipc_shutdown.clone(),
             ipc_ready_tx,
         )

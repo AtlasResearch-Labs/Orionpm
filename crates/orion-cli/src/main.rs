@@ -28,6 +28,10 @@ enum Command {
     /// Start a process from a config file or a script path.
     Start(commands::start::StartArgs),
 
+    /// Run applications in foreground mode as PID 1 for Docker / Kubernetes containers (PM2 runtime parity).
+    #[command(alias = "run")]
+    Runtime(commands::runtime::RuntimeArgs),
+
     /// Stop a running process.
     Stop(commands::stop::StopArgs),
 
@@ -119,6 +123,7 @@ async fn main() -> Result<()> {
 
     let res = match command {
         Command::Start(args) => commands::start::run(args).await,
+        Command::Runtime(args) => commands::runtime::run(args).await,
         Command::Stop(args) => commands::stop::run(args).await,
         Command::Restart(args) => commands::restart::run(args).await,
         Command::Reload(args) => commands::reload::run(args).await,

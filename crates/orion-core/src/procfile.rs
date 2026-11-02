@@ -127,6 +127,7 @@ pub fn parse_procfile_str(
             health: None,
             smtp: None,
             kill_timeout_secs: 5,
+            port: None,
         };
 
         apps.push((name.to_string(), app_config));

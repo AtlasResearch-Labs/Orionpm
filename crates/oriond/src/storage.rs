@@ -51,8 +51,7 @@ impl Storage {
         Ok(storage)
     }
 
-    /// Open an in-memory database (useful for unit testing).
-    #[cfg(test)]
+    /// Open an in-memory database (useful for ephemeral runtime and testing).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let storage = Self {

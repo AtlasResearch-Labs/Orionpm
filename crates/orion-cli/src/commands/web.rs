@@ -346,6 +346,7 @@ async fn handle_connection(
                 alerts: Default::default(),
                 smtp: None,
                 kill_timeout_secs: 5,
+                port: None,
             };
 
             match client::rpc(

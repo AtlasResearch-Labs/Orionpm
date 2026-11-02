@@ -129,6 +129,11 @@ pub struct AppConfig {
     /// Default: 5.
     #[serde(default = "default_kill_timeout_secs")]
     pub kill_timeout_secs: u64,
+
+    /// Optional public port for universal cluster load balancing (e.g. 3000).
+    /// When instances > 1, Orion binds this port and distributes traffic to worker instances.
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 /// Execution mode for a managed process.

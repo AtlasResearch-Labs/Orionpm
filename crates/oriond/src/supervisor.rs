@@ -15,6 +15,60 @@ use tracing::{debug, error, info, warn};
 use crate::logger::LogBus;
 use crate::registry::ProcessRegistry;
 
+#[cfg(windows)]
+pub struct JobObjectGuard {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl JobObjectGuard {
+    pub fn new() -> Option<Self> {
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let res = SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if res == 0 {
+                windows_sys::Win32::Foundation::CloseHandle(handle);
+                return None;
+            }
+            Some(Self { handle })
+        }
+    }
+
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn assign_process(&self, process_handle: windows_sys::Win32::Foundation::HANDLE) -> bool {
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        unsafe { AssignProcessToJobObject(self.handle, process_handle) != 0 }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JobObjectGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe impl Send for JobObjectGuard {}
+
+#[cfg(windows)]
+unsafe impl Sync for JobObjectGuard {}
+
 /// Spawn a dedicated supervisor task for a managed process.
 /// This task manages the process lifecycle, restarts, file watching,
 /// stdout/stderr streaming, log file mirroring, and graceful shutdown.
@@ -243,6 +297,19 @@ async fn run_supervisor_loop(
         let pid = child.id().unwrap_or(0);
         info!(name = %name, pid = pid, "Process is running");
         registry.set_state(&name, ProcessState::Running { pid });
+
+        // Phase 3: Bind child to Windows Job Object to guarantee atomic cleanup of all descendants
+        #[cfg(windows)]
+        let _job_guard = {
+            if let Some(guard) = JobObjectGuard::new() {
+                if let Some(raw) = child.raw_handle() {
+                    let _ = guard.assign_process(raw as _);
+                }
+                Some(guard)
+            } else {
+                None
+            }
+        };
 
         // Stream stdout (mirrored to file with auto-rotation if configured, and written to SQLite logger)
         // Fix P0 Bug 2: Safe byte chunk reader with from_utf8_lossy and 64KB line length cap

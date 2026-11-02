@@ -20,6 +20,7 @@ pub async fn serve(
     registry: ProcessRegistry,
     storage: Storage,
     logger: LogBus,
+    cluster: crate::cluster::ClusterRegistry,
     shutdown: CancellationToken,
     ready_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
 ) -> Result<()> {
@@ -28,12 +29,14 @@ pub async fn serve(
     let handler_registry = registry.clone();
     let handler_storage = storage.clone();
     let handler_logger = logger.clone();
+    let handler_cluster = cluster.clone();
     let handler_shutdown = shutdown.clone();
 
     let handler = move |request: Request, writer: Arc<Mutex<ResponseWriter>>| {
         let registry = handler_registry.clone();
         let storage = handler_storage.clone();
         let logger = handler_logger.clone();
+        let cluster = handler_cluster.clone();
         let daemon_shutdown = handler_shutdown.clone();
 
         async move {
@@ -43,6 +46,7 @@ pub async fn serve(
                 registry,
                 storage,
                 logger,
+                cluster,
                 start_time,
                 daemon_shutdown,
             )
@@ -53,12 +57,14 @@ pub async fn serve(
     orion_ipc::server::run(handler, shutdown, ready_tx).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_request(
     request: Request,
     writer: Arc<Mutex<ResponseWriter>>,
     registry: ProcessRegistry,
     storage: Storage,
     logger: LogBus,
+    cluster: crate::cluster::ClusterRegistry,
     start_time: Instant,
     daemon_shutdown: CancellationToken,
 ) -> Result<()> {
@@ -95,11 +101,23 @@ async fn dispatch_request(
 
                 crate::supervisor::spawn(
                     name.clone(),
-                    config,
+                    config.clone(),
                     registry.clone(),
                     logger.clone(),
                     cancel_token,
                 );
+
+                // Universal Cluster Mode: if port is configured and instances > 1, start TCP balancer
+                if let Some(port) = config.port {
+                    if config.instances > 1 {
+                        let base_name = name.split('-').next().unwrap_or(&name);
+                        let backend_ports =
+                            (0..config.instances).map(|i| port + 1 + i as u16).collect();
+                        cluster
+                            .register_cluster(base_name, port, backend_ports)
+                            .await;
+                    }
+                }
 
                 let resp = Response::ok(
                     req_id,
@@ -124,6 +142,7 @@ async fn dispatch_request(
                             cancel.cancel();
                         }
                     }
+                    cluster.unregister_cluster(&name).await;
 
                     // Wait for all targets to gracefully terminate and release resources (up to 7s, allowing SIGKILL if SIGTERM ignored).
                     // This matches PM2 behavior and prevents race conditions in deploy scripts (`stop && deploy`).
@@ -420,6 +439,7 @@ async fn dispatch_request(
                             cancel.cancel();
                         }
                     }
+                    cluster.unregister_cluster(&name).await;
 
                     // Await full termination before removing from registry and storage (up to 7s)
                     let start_wait = tokio::time::Instant::now();
@@ -689,6 +709,14 @@ async fn dispatch_request(
                     let base_config = registry.get_config(&matches[0]);
                     if let Some(mut config) = base_config {
                         config.instances = target_count;
+
+                        if let Some(port) = config.port {
+                            let backend_ports =
+                                (0..target_count).map(|i| port + 1 + i as u16).collect();
+                            cluster
+                                .register_cluster(&base_name, port, backend_ports)
+                                .await;
+                        }
 
                         if target_count > current_count {
                             // Scale up: spawn additional instances with unique unused indices

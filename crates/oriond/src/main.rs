@@ -1,11 +1,4 @@
-mod daemon;
-mod handlers;
-mod logger;
-mod metrics;
-mod pruner;
-mod registry;
-mod storage;
-mod supervisor;
+use oriond::*;
 
 use anyhow::Result;
 use tracing::info;

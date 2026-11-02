@@ -86,6 +86,10 @@ pub struct StartArgs {
     /// Health check max consecutive failures before restart (default: 3).
     #[arg(long = "health-max-failures")]
     pub health_max_failures: Option<u32>,
+
+    /// Public port for cluster load balancing (e.g. 3000). When instances > 1, Orion balances traffic across workers.
+    #[arg(long = "port", short = 'p')]
+    pub port: Option<u16>,
 }
 
 pub async fn run(args: StartArgs) -> Result<()> {
@@ -368,6 +372,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
             health: None,
             smtp: None,
             kill_timeout_secs: 5,
+            port: args.port,
         };
 
         if args.health_http.is_some() || args.health_tcp.is_some() {
@@ -400,6 +405,10 @@ async fn spawn_app_instances(name: String, app_config: AppConfig) -> Result<()> 
         app_config.instances
     };
 
+    let base_port = app_config
+        .port
+        .or_else(|| app_config.env.get("PORT").and_then(|p| p.parse().ok()));
+
     if num_instances <= 1 {
         let start_params = StartParams {
             name: name.clone(),
@@ -408,14 +417,33 @@ async fn spawn_app_instances(name: String, app_config: AppConfig) -> Result<()> 
         client::rpc(Method::ProcessStart, Params::ProcessStart(start_params)).await?;
         println!("Started process '{}'", name);
     } else {
+        let mut backend_ports = Vec::new();
         for i in 0..num_instances {
             let instance_name = format!("{}-{}", name, i);
+            let mut worker_config = app_config.clone();
+
+            if let Some(port) = base_port {
+                let worker_port = port + 1 + (i as u16);
+                worker_config
+                    .env
+                    .insert("PORT".to_string(), worker_port.to_string());
+                worker_config.port = Some(port);
+                backend_ports.push(worker_port);
+            }
+
             let start_params = StartParams {
                 name: instance_name.clone(),
-                config: app_config.clone(),
+                config: worker_config,
             };
             client::rpc(Method::ProcessStart, Params::ProcessStart(start_params)).await?;
             println!("Started instance '{}'", instance_name);
+        }
+
+        if let Some(port) = base_port {
+            println!(
+                "Universal Cluster Balancer active: public port :{} -> {} workers ({:?})",
+                port, num_instances, backend_ports
+            );
         }
     }
     Ok(())
