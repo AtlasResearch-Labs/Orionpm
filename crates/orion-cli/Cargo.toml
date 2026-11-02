@@ -29,3 +29,4 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 service-manager = { workspace = true }
 sysinfo = { workspace = true }
+libc = { workspace = true }
