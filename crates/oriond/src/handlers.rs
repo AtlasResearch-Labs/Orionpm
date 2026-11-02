@@ -110,7 +110,14 @@ async fn dispatch_request(
                 // Universal Cluster Mode: if port is configured and instances > 1, start TCP balancer
                 if let Some(port) = config.port {
                     if config.instances > 1 {
-                        let base_name = name.split('-').next().unwrap_or(&name);
+                        let base_name = config
+                            .name
+                            .as_deref()
+                            .unwrap_or_else(|| {
+                                name.rsplit_once('-')
+                                    .map(|(base, _)| base)
+                                    .unwrap_or(&name)
+                            });
                         let backend_ports =
                             (0..config.instances).map(|i| port + 1 + i as u16).collect();
                         cluster
@@ -422,10 +429,15 @@ async fn dispatch_request(
 
                             // Successor is verified ready. Atomically swap backend port in ClusterBalancer!
                             if let (Some(old_p), Some(new_p)) = (old_port, successor_port) {
-                                let base_name = target_name
-                                    .rsplit_once('-')
-                                    .map(|(base, _)| base)
-                                    .unwrap_or(target_name.as_str());
+                                let base_name = config
+                                    .name
+                                    .as_deref()
+                                    .unwrap_or_else(|| {
+                                        target_name
+                                            .rsplit_once('-')
+                                            .map(|(base, _)| base)
+                                            .unwrap_or(target_name.as_str())
+                                    });
                                 cluster.swap_backend(base_name, old_p, new_p).await;
                             }
 
