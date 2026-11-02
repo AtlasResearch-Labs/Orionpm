@@ -32,7 +32,7 @@ temp*.md
 tmp*.md
 brain/
 .system_generated/
-TODO_ISSUES_AND_IMPROVEMENTS.md
+*todo*.md
 
 # Environment files — never commit secrets
 .env
